@@ -1,13 +1,15 @@
-/* Математика перенесена из исходной таблицы:
- * общий хэш = hashrate × quantity; мощность = power × quantity;
- * доход = общий хэш × добыча монеты на MH/s × курс; электричество = мощность / 1000 × 24 × тариф;
- * профит = доход − электричество.
+/* Математика:
+ * общий хэш рига = сумма (hashrate × quantity) по всем картам рига;
+ * общая мощность рига = сумма (power × quantity) по всем картам рига;
+ * добыча на 1 MH/s = coin_per_day (задаётся в конфигурации рига) ÷ общий хэш рига — считается
+ * автоматически, а не берётся из готовых Excel-значений;
+ * доход рига = coin_per_day × курс монеты; электричество = общая мощность / 1000 × 24 × цена за розетку;
+ * профит рига = доход − электричество. Профит фермы — сумма профитов всех ригов.
  */
 const configuredApi = window.localStorage.getItem('korch_api_url') || new URLSearchParams(window.location.search).get('api');
 const sameOriginBackend = !window.location.port || window.location.port === '8000';
 const API = (configuredApi || (sameOriginBackend ? '/api' : `${window.location.protocol}//${window.location.hostname}:8000/api`)).replace(/\/$/, '');
-const EXCEL_DEFAULT_COIN_PER_MHS = 2.8 / 3620;
-const state = { token: localStorage.getItem('korch_token'), user: null, rigs: [], coins: [], selectedRigId: null, cards: [], theme: localStorage.getItem('korch_theme') || 'dark' };
+const state = { token: localStorage.getItem('korch_token'), user: null, rigs: [], coins: [], selectedRigId: null, cards: [], cardsByRig: {}, theme: localStorage.getItem('korch_theme') || 'dark' };
 const app = document.querySelector('#app');
 
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[char]));
@@ -15,15 +17,16 @@ const money = (value) => new Intl.NumberFormat('ru-RU', { style: 'currency', cur
 const number = (value, digits = 2) => new Intl.NumberFormat('ru-RU', { maximumFractionDigits: digits }).format(value || 0);
 
 function coinRate(coinName) {
-  return Number(state.coins.find((coin) => coin.name.toLowerCase() === String(coinName).toLowerCase())?.price_usd || 0);
+  return Number(state.coins.find((coin) => coin.name.toLowerCase() === String(coinName || '').toLowerCase())?.price_usd || 0);
 }
 
-function calculation(card, electricityCost = state.user?.electricity_cost || 0) {
-  const totalHashrate = Number(card.hashrate) * Number(card.quantity);
-  const totalPower = Number(card.power) * Number(card.quantity);
-  const grossIncome = totalHashrate * Number(card.income_per_mhs) * coinRate(card.coin);
-  const electricityExpense = (totalPower / 1000) * 24 * electricityCost;
-  return { totalHashrate, totalPower, grossIncome, electricityExpense, profit: grossIncome - electricityExpense };
+function rigCalculation(rig, cards) {
+  const totalHashrate = cards.reduce((sum, card) => sum + Number(card.hashrate) * Number(card.quantity), 0);
+  const totalPower = cards.reduce((sum, card) => sum + Number(card.power) * Number(card.quantity), 0);
+  const incomePerMhs = totalHashrate > 0 ? Number(rig?.coin_per_day || 0) / totalHashrate : 0;
+  const grossIncome = totalHashrate * incomePerMhs * coinRate(rig?.coin);
+  const electricityExpense = (totalPower / 1000) * 24 * Number(rig?.electricity_cost || 0);
+  return { totalHashrate, totalPower, incomePerMhs, grossIncome, electricityExpense, profit: grossIncome - electricityExpense };
 }
 
 async function request(path, options = {}) {
@@ -73,26 +76,29 @@ function renderAuth(mode = 'login') {
 }
 
 function renderDashboard() {
-  const all = state.cards; // cards of current rig are replaced below, global totals are loaded separately in refresh.
-  const farm = state.farmCards || all;
-  const farmTotals = farm.reduce((sum, card) => { const item = calculation(card); sum.profit += item.profit; sum.electricityExpense += item.electricityExpense; return sum; }, { profit: 0, electricityExpense: 0 });
-  const rigTotals = state.cards.reduce((sum, card) => { const item = calculation(card); sum.profit += item.profit; sum.electricityExpense += item.electricityExpense; return sum; }, { profit: 0, electricityExpense: 0 });
+  const farmTotals = state.rigs.reduce((sum, rig) => {
+    const result = rigCalculation(rig, state.cardsByRig[rig.id] || []);
+    sum.profit += result.profit; sum.electricityExpense += result.electricityExpense; return sum;
+  }, { profit: 0, electricityExpense: 0 });
   const selectedRig = state.rigs.find((rig) => rig.id === state.selectedRigId);
-  app.innerHTML = `<div class="mx-auto min-h-screen max-w-6xl p-4 sm:p-7"><header class="mb-7 flex items-center justify-between gap-4"><div><p class="text-xs font-bold uppercase tracking-[.2em] text-emerald-500">${escapeHtml(state.user.username)}</p><h1 class="text-2xl font-black sm:text-3xl">Мой корч</h1></div><div class="flex flex-wrap justify-end gap-2"><button id="settings" class="rounded-xl border border-slate-300 px-3 py-2 text-sm font-bold dark:border-slate-700">⚙️ Настройки</button><button id="theme-button" aria-label="Сменить тему" class="rounded-xl border border-slate-300 px-3 py-2 text-lg dark:border-slate-700">${state.theme === 'dark' ? '☀️' : '🌙'}</button><button id="logout-button" class="rounded-xl border border-slate-300 px-3 py-2 text-sm font-bold dark:border-slate-700">Выйти</button></div></header><section class="grid gap-4 sm:grid-cols-2"><article class="stat-card rounded-2xl bg-emerald-500 p-5 text-slate-950 shadow-lg"><p class="text-sm font-bold opacity-75">Чистый профит · вся ферма</p><p class="mt-2 text-3xl font-black">${money(farmTotals.profit)}</p><p class="mt-1 text-sm font-medium">за 24 часа</p></article><article class="stat-card rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900"><p class="text-sm font-bold text-slate-500 dark:text-slate-400">Расходы на свет · вся ферма</p><p class="mt-2 text-3xl font-black">${money(farmTotals.electricityExpense)}</p><p class="mt-1 text-sm text-slate-500">за 24 часа</p></article></section><section class="mt-8"><div class="mb-3 flex items-center justify-between"><h2 class="font-bold">Риги</h2><button id="add-rig" class="rounded-xl bg-slate-900 px-3 py-2 text-sm font-bold text-white dark:bg-slate-100 dark:text-slate-950">＋ Добавить риг</button></div><div class="scroll-row flex gap-2 overflow-x-auto pb-2">${state.rigs.map((rig) => `<button data-rig-id="${rig.id}" class="rig-tab shrink-0 rounded-xl px-4 py-2.5 text-sm font-bold ${rig.id === state.selectedRigId ? 'bg-emerald-500 text-slate-950' : 'border border-slate-300 dark:border-slate-700'}">${escapeHtml(rig.name)}</button>`).join('') || '<p class="text-slate-500">Ригов пока нет.</p>'}</div></section><section class="mt-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6"><div class="mb-5 flex flex-wrap items-center justify-between gap-3"><div><p class="text-xs font-bold uppercase tracking-wider text-slate-500">Текущий риг</p><h2 class="text-xl font-black">${escapeHtml(selectedRig?.name || 'Не выбран')}</h2></div>${selectedRig ? `<button id="delete-rig" class="text-sm font-semibold text-rose-500">Удалить риг</button>` : ''}</div><div id="card-list" class="space-y-3">${state.cards.length ? state.cards.map(cardHtml).join('') : `<div class="rounded-xl border border-dashed border-slate-300 p-8 text-center text-slate-500 dark:border-slate-700">В этом риге ещё нет оборудования.</div>`}</div>${selectedRig ? `<footer class="mt-6 flex flex-col justify-between gap-4 border-t border-slate-200 pt-5 dark:border-slate-800 sm:flex-row sm:items-center"><div><p class="text-sm text-slate-500">Итого по ригу · 24 часа</p><p class="text-xl font-black text-emerald-500">${money(rigTotals.profit)} <span class="text-sm font-medium text-slate-500">/ свет ${money(rigTotals.electricityExpense)}</span></p></div><button id="add-card" class="w-fit rounded-xl bg-emerald-500 px-3 py-2 text-sm font-bold text-slate-950">＋ Добавить карту</button></footer>` : ''}</section></div>`;
-  document.querySelector('#theme-button').onclick = () => { state.theme = state.theme === 'dark' ? 'light' : 'dark'; applyTheme(); renderDashboard(); };
+  const rigTotals = selectedRig ? rigCalculation(selectedRig, state.cards) : { profit: 0, electricityExpense: 0, incomePerMhs: 0 };
+  const rigSubtitle = selectedRig ? (selectedRig.coin ? `${escapeHtml(selectedRig.coin)} · ${number(selectedRig.coin_per_day, 6)}/сутки · ⚡ ${money(selectedRig.electricity_cost)}/кВт·ч` : 'Конфигурация не задана — нажмите «Конфигурация»') : '';
+  app.innerHTML = `<div class="mx-auto min-h-screen max-w-6xl p-4 sm:p-7"><header class="mb-7 flex items-center justify-between gap-4"><div><p class="text-xs font-bold uppercase tracking-[.2em] text-emerald-500">${escapeHtml(state.user.username)}</p><h1 class="text-2xl font-black sm:text-3xl">Мой корч</h1></div><div class="flex flex-wrap justify-end gap-2"><button id="settings" class="rounded-xl border border-slate-300 px-3 py-2 text-sm font-bold dark:border-slate-700">⚙️ Настройки</button><button id="logout-button" class="rounded-xl border border-slate-300 px-3 py-2 text-sm font-bold dark:border-slate-700">Выйти</button></div></header><section class="grid gap-4 sm:grid-cols-2"><article class="stat-card rounded-2xl bg-emerald-500 p-5 text-slate-950 shadow-lg"><p class="text-sm font-bold opacity-75">Чистый профит · вся ферма</p><p class="mt-2 text-3xl font-black">${money(farmTotals.profit)}</p><p class="mt-1 text-sm font-medium">за 24 часа</p></article><article class="stat-card rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900"><p class="text-sm font-bold text-slate-500 dark:text-slate-400">Расходы на свет · вся ферма</p><p class="mt-2 text-3xl font-black">${money(farmTotals.electricityExpense)}</p><p class="mt-1 text-sm text-slate-500">за 24 часа</p></article></section><section class="mt-8"><div class="mb-3 flex items-center justify-between"><h2 class="font-bold">Риги</h2><button id="add-rig" class="rounded-xl bg-slate-900 px-3 py-2 text-sm font-bold text-white dark:bg-slate-100 dark:text-slate-950">＋ Добавить риг</button></div><div class="scroll-row flex gap-2 overflow-x-auto pb-2">${state.rigs.map((rig) => `<button data-rig-id="${rig.id}" class="rig-tab shrink-0 rounded-xl px-4 py-2.5 text-sm font-bold ${rig.id === state.selectedRigId ? 'bg-emerald-500 text-slate-950' : 'border border-slate-300 dark:border-slate-700'}">${escapeHtml(rig.name)}</button>`).join('') || '<p class="text-slate-500">Ригов пока нет.</p>'}</div></section><section class="mt-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6"><div class="mb-5 flex flex-wrap items-center justify-between gap-3"><div><p class="text-xs font-bold uppercase tracking-wider text-slate-500">Текущий риг</p><h2 class="text-xl font-black">${escapeHtml(selectedRig?.name || 'Не выбран')}</h2>${selectedRig ? `<p class="mt-1 text-sm text-slate-500">${rigSubtitle}</p>` : ''}</div>${selectedRig ? `<button id="delete-rig" class="text-sm font-semibold text-rose-500">Удалить риг</button>` : ''}</div><div id="card-list" class="space-y-3">${state.cards.length ? state.cards.map(cardHtml).join('') : `<div class="rounded-xl border border-dashed border-slate-300 p-8 text-center text-slate-500 dark:border-slate-700">В этом риге ещё нет оборудования.</div>`}</div>${selectedRig ? `<footer class="mt-6 flex flex-col justify-between gap-4 border-t border-slate-200 pt-5 dark:border-slate-800 sm:flex-row sm:items-center"><div><p class="text-sm text-slate-500">Итого по ригу · 24 часа</p><p class="text-xl font-black text-emerald-500">${money(rigTotals.profit)} <span class="text-sm font-medium text-slate-500">/ свет ${money(rigTotals.electricityExpense)}</span></p></div><div class="flex gap-2"><button id="rig-config" class="rounded-xl border border-slate-300 px-3 py-2 text-sm font-bold dark:border-slate-700">⚙️ Конфигурация</button><button id="add-card" class="w-fit rounded-xl bg-emerald-500 px-3 py-2 text-sm font-bold text-slate-950">＋ Добавить карту</button></div></footer>` : ''}</section></div>`;
   document.querySelector('#logout-button').onclick = () => logout(true);
   document.querySelector('#add-rig').onclick = () => showRigModal();
   document.querySelectorAll('.rig-tab').forEach((button) => button.onclick = async () => { state.selectedRigId = Number(button.dataset.rigId); await loadSelectedRig(); renderDashboard(); });
   document.querySelector('#add-card')?.addEventListener('click', () => { state.editingCardId = null; showCardModal(); });
   document.querySelector('#settings')?.addEventListener('click', showSettingsModal);
   document.querySelector('#delete-rig')?.addEventListener('click', deleteSelectedRig);
+  document.querySelector('#rig-config')?.addEventListener('click', () => showRigConfigModal(selectedRig));
   document.querySelectorAll('[data-edit-card]').forEach((button) => button.onclick = () => { state.editingCardId = Number(button.dataset.editCard); showCardModal(state.cards.find((card) => card.id === Number(button.dataset.editCard))); });
   document.querySelectorAll('[data-delete-card]').forEach((button) => button.onclick = () => deleteCard(Number(button.dataset.deleteCard)));
 }
 
 function cardHtml(card) {
-  const result = calculation(card);
-  return `<article class="rounded-xl bg-slate-50 p-4 dark:bg-slate-800/70"><div class="flex justify-between gap-3"><div><h3 class="font-black">${escapeHtml(card.model)} <span class="ml-1 rounded-md bg-amber-400 px-1.5 py-0.5 text-xs text-slate-950">${escapeHtml(card.coin)}</span></h3><p class="mt-1 text-sm text-slate-500">${number(card.quantity, 0)} шт. · ${number(card.hashrate)} MH/s на карту · ${number(card.power, 0)} W на карту</p></div><div class="flex h-fit gap-1"><button data-edit-card="${card.id}" class="rounded-lg p-2 hover:bg-slate-200 dark:hover:bg-slate-700" aria-label="Редактировать">✏️</button><button data-delete-card="${card.id}" class="rounded-lg p-2 hover:bg-rose-100 dark:hover:bg-rose-950" aria-label="Удалить">❌</button></div></div><div class="mt-4 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4"><p><span class="block text-xs text-slate-500">Общий хэш</span><b>${number(result.totalHashrate)} MH/s</b></p><p><span class="block text-xs text-slate-500">Мощность</span><b>${number(result.totalPower, 0)} W</b></p><p><span class="block text-xs text-slate-500">Доход</span><b>${money(result.grossIncome)}</b></p><p><span class="block text-xs text-slate-500">Профит 24</span><b class="${result.profit >= 0 ? 'text-emerald-500' : 'text-rose-500'}">${money(result.profit)}</b></p></div></article>`;
+  const totalHashrate = Number(card.hashrate) * Number(card.quantity);
+  const totalPower = Number(card.power) * Number(card.quantity);
+  return `<article class="rounded-xl bg-slate-50 p-4 dark:bg-slate-800/70"><div class="flex justify-between gap-3"><div><h3 class="font-black">${escapeHtml(card.model)}</h3><p class="mt-1 text-sm text-slate-500">${number(card.quantity, 0)} шт. · ${number(card.hashrate)} MH/s на карту · ${number(card.power, 0)} W на карту</p></div><div class="flex h-fit gap-1"><button data-edit-card="${card.id}" class="rounded-lg p-2 hover:bg-slate-200 dark:hover:bg-slate-700" aria-label="Редактировать">✏️</button><button data-delete-card="${card.id}" class="rounded-lg p-2 hover:bg-rose-100 dark:hover:bg-rose-950" aria-label="Удалить">❌</button></div></div><div class="mt-4 grid grid-cols-2 gap-2 text-sm"><p><span class="block text-xs text-slate-500">Общий хэш</span><b>${number(totalHashrate)} MH/s</b></p><p><span class="block text-xs text-slate-500">Мощность</span><b>${number(totalPower, 0)} W</b></p></div></article>`;
 }
 
 function modal(title, content) {
@@ -103,46 +109,56 @@ function modal(title, content) {
 
 function showRigModal() {
   // Отправку формы полностью обрабатывает глобальный оптимистичный listener (см. ниже).
-  modal('Новый риг', `<form class="space-y-4"><label class="block text-sm font-semibold">Название<input name="name" required maxlength="80" class="mt-1.5 w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2.5 dark:border-slate-700" placeholder="Например, Балкон"></label><button class="w-full rounded-xl bg-emerald-500 py-3 font-bold text-slate-950">Создать риг</button></form>`);
+  modal('Новый риг', `<form id="rig-form" class="space-y-4"><label class="block text-sm font-semibold">Название<input name="name" required maxlength="80" class="mt-1.5 w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2.5 dark:border-slate-700" placeholder="Например, Балкон"></label><button class="w-full rounded-xl bg-emerald-500 py-3 font-bold text-slate-950">Создать риг</button></form>`);
+}
+
+function showRigConfigModal(rig) {
+  if (!rig) return;
+  if (!state.coins.length) return toast('Сначала добавьте хотя бы одну монету в настройках', 'error');
+  const coinOptions = state.coins.map((coin) => `<option value="${escapeHtml(coin.name)}" ${coin.name.toLowerCase() === String(rig.coin || '').toLowerCase() ? 'selected' : ''}>${escapeHtml(coin.name)} · ${money(coin.price_usd)}</option>`).join('');
+  const node = modal(`Конфигурация: ${escapeHtml(rig.name)}`, `<form data-rig-config="${rig.id}" class="space-y-4"><label class="block text-sm font-semibold">Монета<select name="coin" required class="field">${coinOptions}</select></label><label class="block text-sm font-semibold">Добыча монет в сутки, весь риг<input name="coin_per_day" type="number" min="0" step="any" required value="${rig.coin_per_day ?? 0}" class="field"></label><label class="block text-sm font-semibold">Цена за розетку, $ за кВт·ч<input name="electricity_cost" type="number" min="0" step="0.001" required value="${rig.electricity_cost ?? 0}" class="field"></label><p class="rounded-xl bg-slate-100 p-3 text-xs text-slate-500 dark:bg-slate-800">Доход на 1 MH/s считается автоматически: монет в сутки ÷ суммарный хешрейт всех карт этого рига. Значения в код не зашиты.</p><button class="w-full rounded-xl bg-emerald-500 py-3 font-bold text-slate-950">Сохранить конфигурацию</button></form>`);
+  node.querySelectorAll('.field').forEach((input) => input.className = 'field mt-1.5 w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2.5 outline-none focus:ring-2 focus:ring-emerald-500 dark:border-slate-700');
+  // Отправку формы полностью обрабатывает глобальный оптимистичный listener (см. ниже).
 }
 
 function showSettingsModal() {
-  const node = modal('Настройки', `<div class="settings-tabs mb-5 grid grid-cols-2 rounded-xl bg-slate-100 p-1 dark:bg-slate-800"><button type="button" data-settings-tab="power" class="settings-tab rounded-lg bg-white px-3 py-2 text-sm font-bold shadow-sm dark:bg-slate-700">⚡ Электричество</button><button type="button" data-settings-tab="coins" class="settings-tab rounded-lg px-3 py-2 text-sm font-bold text-slate-500">🪙 Монеты</button></div><section data-settings-panel="power"><form id="settings-power-form" class="space-y-4"><p class="text-sm text-slate-500">Тариф применяется ко всем картам и ригам.</p><label class="block text-sm font-semibold">Стоимость, $ за кВт·ч<input name="electricity_cost" type="number" min="0" step="0.001" required value="${state.user.electricity_cost}" class="settings-field"></label><button class="w-full rounded-xl bg-emerald-500 py-3 font-bold text-slate-950">Сохранить тариф</button></form></section><section data-settings-panel="coins" class="hidden"><p class="mb-4 text-sm text-slate-500">Курс в USD применяется ко всем картам с этой монетой сразу.</p><div id="settings-coin-list" class="space-y-2"></div><form id="settings-new-coin" class="mt-4 grid grid-cols-2 gap-2 border-t border-slate-200 pt-4 dark:border-slate-700"><label class="text-xs font-bold text-slate-500">Название<input name="name" required maxlength="30" placeholder="BTC" class="settings-field"></label><label class="text-xs font-bold text-slate-500">Курс, $<input name="price_usd" type="number" required min="0" step="any" placeholder="0.00" class="settings-field"></label><button class="col-span-2 rounded-xl bg-emerald-500 py-2.5 font-bold text-slate-950">＋ Добавить монету</button></form></section>`);
+  const node = modal('Настройки', `<div class="mb-5 flex items-center justify-between rounded-xl bg-slate-100 p-3 dark:bg-slate-800"><div><p class="text-sm font-bold">Тема оформления</p><p class="text-xs text-slate-500">Тёмная или светлая</p></div><button id="settings-theme-toggle" class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-lg dark:border-slate-700 dark:bg-slate-900">${state.theme === 'dark' ? '☀️' : '🌙'}</button></div><p class="mb-2 text-sm font-bold">🪙 Монеты</p><p class="mb-4 text-sm text-slate-500">Курс в USD применяется сразу везде, где используется эта монета.</p><div id="settings-coin-list" class="space-y-2"></div><form id="settings-new-coin" class="mt-4 grid grid-cols-2 gap-2 border-t border-slate-200 pt-4 dark:border-slate-700"><label class="text-xs font-bold text-slate-500">Название<input name="name" required maxlength="30" placeholder="BTC" class="settings-field"></label><label class="text-xs font-bold text-slate-500">Курс, $<input name="price_usd" type="number" required min="0" step="any" placeholder="0.00" class="settings-field"></label><button class="col-span-2 rounded-xl bg-emerald-500 py-2.5 font-bold text-slate-950">＋ Добавить монету</button></form>`);
   node.querySelectorAll('.settings-field').forEach((input) => input.className = 'settings-field mt-1.5 w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2.5 outline-none focus:ring-2 focus:ring-emerald-500 dark:border-slate-700');
+  node.querySelector('#settings-theme-toggle').onclick = () => {
+    state.theme = state.theme === 'dark' ? 'light' : 'dark'; applyTheme();
+    node.querySelector('#settings-theme-toggle').textContent = state.theme === 'dark' ? '☀️' : '🌙';
+    renderDashboard();
+  };
   const coinPanel = node.querySelector('#settings-coin-list');
   const renderCoins = () => { coinPanel.innerHTML = state.coins.map((coin) => `<form data-settings-coin="${coin.id}" class="grid grid-cols-[1fr_1fr_auto] items-end gap-2 rounded-xl bg-slate-100 p-3 dark:bg-slate-800"><label class="text-xs font-bold text-slate-500">Монета<input name="name" required maxlength="30" value="${escapeHtml(coin.name)}" class="settings-field"></label><label class="text-xs font-bold text-slate-500">Курс, $<input name="price_usd" type="number" required min="0" step="any" value="${coin.price_usd}" class="settings-field"></label><div class="flex gap-1"><button title="Сохранить" class="rounded-lg bg-emerald-500 px-2 py-2 text-sm font-black text-slate-950">✓</button><button type="button" data-settings-delete="${coin.id}" title="Удалить" class="rounded-lg px-2 py-2 text-sm">🗑️</button></div></form>`).join('') || '<p class="text-sm text-slate-500">Добавьте первую монету.</p>'; coinPanel.querySelectorAll('.settings-field').forEach((input) => input.className = 'settings-field mt-1 w-full rounded-lg border border-slate-300 bg-transparent px-2 py-2 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-emerald-500 dark:border-slate-600 dark:text-slate-100'); coinPanel.querySelectorAll('[data-settings-coin]').forEach((form) => form.onsubmit = async (event) => { event.preventDefault(); try { await request(`/coins/${form.dataset.settingsCoin}`, { method: 'PUT', body: JSON.stringify(Object.fromEntries(new FormData(form))) }); await refresh(); renderCoins(); toast('Курс обновлён'); } catch (error) { toast(error.message, 'error'); } }); coinPanel.querySelectorAll('[data-settings-delete]').forEach((button) => button.onclick = async () => { if (!confirm('Удалить монету?')) return; try { await request(`/coins/${button.dataset.settingsDelete}`, { method: 'DELETE' }); await refresh(); renderCoins(); toast('Монета удалена'); } catch (error) { toast(error.message, 'error'); } }); };
   renderCoins();
-  node.querySelectorAll('[data-settings-tab]').forEach((tab) => tab.onclick = () => { node.querySelectorAll('[data-settings-tab]').forEach((item) => item.classList.toggle('bg-white', item === tab)); node.querySelectorAll('[data-settings-panel]').forEach((panel) => panel.classList.toggle('hidden', panel.dataset.settingsPanel !== tab.dataset.settingsTab)); });
-  node.querySelector('#settings-power-form').onsubmit = async (event) => { event.preventDefault(); try { const data = await request('/me/electricity', { method: 'PATCH', body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))) }); state.user.electricity_cost = data.electricity_cost; renderDashboard(); node.remove(); toast('Тариф обновлён'); } catch (error) { toast(error.message, 'error'); } };
   node.querySelector('#settings-new-coin').onsubmit = async (event) => { event.preventDefault(); try { await request('/coins', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))) }); await refresh(); event.currentTarget.reset(); renderCoins(); toast('Монета добавлена'); } catch (error) { toast(error.message, 'error'); } };
 }
 
 function showCardModal(card = null) {
-  if (!state.coins.length) return toast('Сначала добавьте хотя бы одну монету в настройках', 'error');
-  const isEdit = Boolean(card); const values = card || { model: '', coin: state.coins[0].name, quantity: 1, hashrate: '', power: '', income_per_mhs: EXCEL_DEFAULT_COIN_PER_MHS };
-  const coinOptions = state.coins.map((coin) => `<option value="${escapeHtml(coin.name)}" ${coin.name.toLowerCase() === String(values.coin).toLowerCase() ? 'selected' : ''}>${escapeHtml(coin.name)} · ${money(coin.price_usd)}</option>`).join('');
-  const node = modal(isEdit ? 'Редактировать карту' : 'Добавить карту', `<form class="grid gap-3 sm:grid-cols-2"><label class="text-sm font-semibold">Модель<input name="model" required maxlength="80" value="${escapeHtml(values.model)}" class="field"></label><label class="text-sm font-semibold">Монета<select name="coin" required class="field">${coinOptions}</select></label><label class="text-sm font-semibold">Количество<input name="quantity" type="number" required min="1" step="1" value="${values.quantity}" class="field"></label><label class="text-sm font-semibold">Хэш на 1 карту, MH/s<input name="hashrate" type="number" required min="0" step="any" value="${values.hashrate}" class="field"></label><label class="text-sm font-semibold">Мощность на 1 карту, W<input name="power" type="number" required min="0" step="1" value="${values.power}" class="field"></label><label class="text-sm font-semibold">Добыча на 1 MH/s, монет/сутки<input name="income_per_mhs" type="number" required min="0" step="any" value="${values.income_per_mhs}" class="field"></label><p class="sm:col-span-2 rounded-xl bg-slate-100 p-3 text-xs text-slate-500 dark:bg-slate-800">Доход: общий хэш × добыча на 1 MH/s × курс монеты. Excel-значение QTC: 2.8 ÷ 3620 = ${EXCEL_DEFAULT_COIN_PER_MHS.toFixed(9)} QTC/MH/s.</p><button class="sm:col-span-2 rounded-xl bg-emerald-500 py-3 font-bold text-slate-950">${isEdit ? 'Сохранить изменения' : 'Добавить карту'}</button></form>`);
+  const isEdit = Boolean(card); const values = card || { model: '', quantity: 1, hashrate: '', power: '' };
+  const node = modal(isEdit ? 'Редактировать карту' : 'Добавить карту', `<form id="card-form" class="grid gap-3 sm:grid-cols-2"><label class="text-sm font-semibold sm:col-span-2">Модель<input name="model" required maxlength="80" value="${escapeHtml(values.model)}" class="field"></label><label class="text-sm font-semibold">Количество<input name="quantity" type="number" required min="1" step="1" value="${values.quantity}" class="field"></label><label class="text-sm font-semibold">Хэш на 1 карту, MH/s<input name="hashrate" type="number" required min="0" step="any" value="${values.hashrate}" class="field"></label><label class="text-sm font-semibold sm:col-span-2">Мощность на 1 карту, W<input name="power" type="number" required min="0" step="1" value="${values.power}" class="field"></label><button class="sm:col-span-2 rounded-xl bg-emerald-500 py-3 font-bold text-slate-950">${isEdit ? 'Сохранить изменения' : 'Добавить карту'}</button></form>`);
   node.querySelectorAll('.field').forEach((input) => input.className = 'field mt-1.5 w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2.5 outline-none focus:ring-2 focus:ring-emerald-500 dark:border-slate-700');
   // Отправку формы полностью обрабатывает глобальный оптимистичный listener (см. ниже).
 }
 
 async function deleteCard(cardId) { if (!confirm('Удалить эту карту из рига?')) return; try { await request(`/cards/${cardId}`, { method: 'DELETE' }); await refresh(); toast('Карта удалена'); } catch (error) { toast(error.message, 'error'); } }
 async function deleteSelectedRig() { if (!confirm('Удалить риг и всё оборудование в нём?')) return; try { await request(`/rigs/${state.selectedRigId}`, { method: 'DELETE' }); state.selectedRigId = null; await refresh(); toast('Риг удалён'); } catch (error) { toast(error.message, 'error'); } }
-async function loadSelectedRig() { state.cards = state.selectedRigId ? await request(`/rigs/${state.selectedRigId}/cards`) : []; }
+async function loadSelectedRig() { state.cards = state.selectedRigId ? await request(`/rigs/${state.selectedRigId}/cards`) : []; state.cardsByRig[state.selectedRigId] = state.cards; }
 async function refresh() {
   // /me, /coins и /rigs независимы — запускаем параллельно вместо последовательных await.
   const [user, coins, rigs] = await Promise.all([request('/me'), request('/coins'), request('/rigs')]);
   state.user = user; state.coins = coins; state.rigs = rigs;
   if (!state.rigs.some((rig) => rig.id === state.selectedRigId)) state.selectedRigId = state.rigs[0]?.id || null;
-  // Карты каждого рига запрашиваются параллельно; карты текущего рига берём из этого же набора,
-  // а не отдельным запросом через loadSelectedRig() — риг уже входит в state.rigs.
+  // Карты каждого рига запрашиваются параллельно и группируются по id рига —
+  // это нужно и для показа текущего рига, и для расчёта итогов всей фермы.
   const cardLists = await Promise.all(state.rigs.map((rig) => request(`/rigs/${rig.id}/cards`)));
-  state.farmCards = cardLists.flat();
-  const selectedIndex = state.rigs.findIndex((rig) => rig.id === state.selectedRigId);
-  state.cards = selectedIndex >= 0 ? cardLists[selectedIndex] : [];
+  state.cardsByRig = {};
+  state.rigs.forEach((rig, index) => { state.cardsByRig[rig.id] = cardLists[index]; });
+  state.cards = state.cardsByRig[state.selectedRigId] || [];
   renderDashboard();
 }
-function logout(showMessage) { state.token = null; state.user = null; state.cards = []; localStorage.removeItem('korch_token'); renderAuth(); if (showMessage) toast('Вы вышли из аккаунта'); }
+function logout(showMessage) { state.token = null; state.user = null; state.cards = []; state.cardsByRig = {}; localStorage.removeItem('korch_token'); renderAuth(); if (showMessage) toast('Вы вышли из аккаунта'); }
 
 /* Optimistic UI: modal mutations render immediately and reconcile in background. */
 document.addEventListener('submit', (event) => {
@@ -156,31 +172,24 @@ document.addEventListener('submit', (event) => {
     return;
   }
   const raw = Object.fromEntries(new FormData(form));
-  if (form.querySelector('[name="income_per_mhs"]')) {
+  if (form.id === 'card-form') {
     event.preventDefault(); event.stopImmediatePropagation();
     const title = form.closest('.modal-panel')?.querySelector('h2')?.textContent || '';
     const isEdit = /редакт/i.test(title);
-    const values = { ...raw, rig_id: state.selectedRigId, quantity: Number(raw.quantity), hashrate: Number(raw.hashrate), power: Number(raw.power), income_per_mhs: Number(raw.income_per_mhs) };
+    const values = { rig_id: state.selectedRigId, model: raw.model, quantity: Number(raw.quantity), hashrate: Number(raw.hashrate), power: Number(raw.power) };
     const existing = isEdit ? state.cards.find((card) => card.id === state.editingCardId) : null;
     const tempId = `optimistic-card-${Date.now()}`;
-    const previousCards = [...state.cards]; const previousFarm = [...(state.farmCards || [])];
+    const previousCards = [...state.cards]; const previousByRig = { ...state.cardsByRig };
     const optimistic = { ...values, id: existing?.id || tempId };
     state.cards = existing ? state.cards.map((card) => card.id === existing.id ? optimistic : card) : [...state.cards, optimistic];
-    state.farmCards = existing ? state.farmCards.map((card) => card.id === existing.id ? optimistic : card) : [...(state.farmCards || []), optimistic];
+    state.cardsByRig[state.selectedRigId] = state.cards;
     modalRoot.remove(); renderDashboard(); toast(existing ? 'Карта обновлена' : 'Карта добавлена');
     const path = existing ? `/cards/${existing.id}` : '/cards'; state.editingCardId = null;
     request(path, { method: existing ? 'PUT' : 'POST', body: JSON.stringify(values) }).then((saved) => {
       state.cards = state.cards.map((card) => card.id === optimistic.id ? saved : card);
-      state.farmCards = state.farmCards.map((card) => card.id === optimistic.id ? saved : card);
+      state.cardsByRig[state.selectedRigId] = state.cards;
       renderDashboard();
-    }).catch((error) => { state.cards = previousCards; state.farmCards = previousFarm; renderDashboard(); toast(`Изменения карты отменены: ${error.message}`, 'error'); });
-    return;
-  }
-  if (form.id === 'settings-power-form') {
-    event.preventDefault(); event.stopImmediatePropagation();
-    const nextCost = Number(raw.electricity_cost); const previousCost = state.user.electricity_cost;
-    state.user.electricity_cost = nextCost; modalRoot.remove(); renderDashboard(); toast('Тариф обновлён');
-    request('/me/electricity', { method: 'PATCH', body: JSON.stringify({ electricity_cost: nextCost }) }).catch((error) => { state.user.electricity_cost = previousCost; renderDashboard(); toast(`Тариф не сохранён: ${error.message}`, 'error'); });
+    }).catch((error) => { state.cards = previousCards; state.cardsByRig = previousByRig; renderDashboard(); toast(`Изменения карты отменены: ${error.message}`, 'error'); });
     return;
   }
   if (form.id === 'settings-new-coin') {
@@ -192,19 +201,34 @@ document.addEventListener('submit', (event) => {
   }
   if (form.dataset.settingsCoin) {
     event.preventDefault(); event.stopImmediatePropagation();
-    const coinId = form.dataset.settingsCoin; const previousCoins = [...state.coins]; const previousCards = [...state.cards]; const previousFarm = [...(state.farmCards || [])]; const oldCoin = state.coins.find((coin) => String(coin.id) === String(coinId)); const nextCoin = { ...oldCoin, name: String(raw.name).trim().toUpperCase(), price_usd: Number(raw.price_usd) };
-    state.coins = state.coins.map((coin) => String(coin.id) === String(coinId) ? nextCoin : coin); state.cards = state.cards.map((card) => card.coin.toLowerCase() === oldCoin.name.toLowerCase() ? { ...card, coin: nextCoin.name } : card); state.farmCards = state.farmCards.map((card) => card.coin.toLowerCase() === oldCoin.name.toLowerCase() ? { ...card, coin: nextCoin.name } : card);
+    const coinId = form.dataset.settingsCoin; const previousCoins = [...state.coins]; const previousRigs = [...state.rigs]; const oldCoin = state.coins.find((coin) => String(coin.id) === String(coinId)); const nextCoin = { ...oldCoin, name: String(raw.name).trim().toUpperCase(), price_usd: Number(raw.price_usd) };
+    state.coins = state.coins.map((coin) => String(coin.id) === String(coinId) ? nextCoin : coin); state.rigs = state.rigs.map((rig) => rig.coin && rig.coin.toLowerCase() === oldCoin.name.toLowerCase() ? { ...rig, coin: nextCoin.name } : rig);
     modalRoot.remove(); renderDashboard(); toast('Курс обновлён');
-    request(`/coins/${coinId}`, { method: 'PUT', body: JSON.stringify({ name: nextCoin.name, price_usd: nextCoin.price_usd }) }).catch((error) => { state.coins = previousCoins; state.cards = previousCards; state.farmCards = previousFarm; renderDashboard(); toast(`Курс не сохранён: ${error.message}`, 'error'); });
+    request(`/coins/${coinId}`, { method: 'PUT', body: JSON.stringify({ name: nextCoin.name, price_usd: nextCoin.price_usd }) }).catch((error) => { state.coins = previousCoins; state.rigs = previousRigs; renderDashboard(); toast(`Курс не сохранён: ${error.message}`, 'error'); });
     return;
   }
-  if (form.querySelector('[name="name"]') && form.closest('.modal-panel') && !form.dataset.settingsCoin && form.id !== 'settings-new-coin') {
+  if (form.dataset.rigConfig) {
+    event.preventDefault(); event.stopImmediatePropagation();
+    const rigId = form.dataset.rigConfig; const previousRigs = [...state.rigs];
+    const nextRig = { ...state.rigs.find((rig) => String(rig.id) === String(rigId)), coin: String(raw.coin).trim().toUpperCase(), coin_per_day: Number(raw.coin_per_day), electricity_cost: Number(raw.electricity_cost) };
+    state.rigs = state.rigs.map((rig) => String(rig.id) === String(rigId) ? nextRig : rig);
+    modalRoot.remove(); renderDashboard(); toast('Конфигурация сохранена');
+    request(`/rigs/${rigId}/config`, { method: 'PATCH', body: JSON.stringify({ coin: nextRig.coin, coin_per_day: nextRig.coin_per_day, electricity_cost: nextRig.electricity_cost }) }).then((saved) => {
+      state.rigs = state.rigs.map((rig) => String(rig.id) === String(rigId) ? saved : rig); renderDashboard();
+    }).catch((error) => { state.rigs = previousRigs; renderDashboard(); toast(`Конфигурация не сохранена: ${error.message}`, 'error'); });
+    return;
+  }
+  if (form.id === 'rig-form') {
     event.preventDefault(); event.stopImmediatePropagation();
     const name = String(raw.name || '').trim(); if (!name) return;
     const tempId = `optimistic-rig-${Date.now()}`; const previousRigs = [...state.rigs]; const previousSelected = state.selectedRigId;
-    state.rigs = [...state.rigs, { id: tempId, name }]; state.selectedRigId = tempId; state.cards = [];
+    state.rigs = [...state.rigs, { id: tempId, name, coin: '', coin_per_day: 0, electricity_cost: 0.1 }]; state.selectedRigId = tempId; state.cards = []; state.cardsByRig[tempId] = [];
     modalRoot.remove(); renderDashboard(); toast('Риг добавлен');
-    request('/rigs', { method: 'POST', body: JSON.stringify({ name }) }).then((saved) => { state.rigs = state.rigs.map((rig) => rig.id === tempId ? saved : rig); state.selectedRigId = saved.id; renderDashboard(); }).catch((error) => { state.rigs = previousRigs; state.selectedRigId = previousSelected; renderDashboard(); toast(`Риг не сохранён: ${error.message}`, 'error'); });
+    request('/rigs', { method: 'POST', body: JSON.stringify({ name }) }).then((saved) => {
+      state.rigs = state.rigs.map((rig) => rig.id === tempId ? saved : rig);
+      state.cardsByRig[saved.id] = state.cardsByRig[tempId] || []; delete state.cardsByRig[tempId];
+      state.selectedRigId = saved.id; state.cards = state.cardsByRig[saved.id]; renderDashboard();
+    }).catch((error) => { state.rigs = previousRigs; state.selectedRigId = previousSelected; delete state.cardsByRig[tempId]; renderDashboard(); toast(`Риг не сохранён: ${error.message}`, 'error'); });
     return;
   }
 }, true);
@@ -214,7 +238,7 @@ document.addEventListener('click', (event) => {
   if (!button) return;
   event.preventDefault(); event.stopImmediatePropagation();
   if (!confirm('Удалить монету?')) return;
-  const coinId = button.dataset.settingsDelete; const previousCoins = [...state.coins]; const removed = state.coins.find((coin) => String(coin.id) === String(coinId));
+  const coinId = button.dataset.settingsDelete; const previousCoins = [...state.coins];
   state.coins = state.coins.filter((coin) => String(coin.id) !== String(coinId)); const modalRoot = button.closest('.modal-backdrop'); modalRoot?.remove(); renderDashboard(); toast('Монета удалена');
   request(`/coins/${coinId}`, { method: 'DELETE' }).catch((error) => { state.coins = previousCoins; renderDashboard(); toast(`Монета не удалена: ${error.message}`, 'error'); });
 }, true);

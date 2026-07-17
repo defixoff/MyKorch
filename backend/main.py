@@ -55,13 +55,15 @@ def initialize_database() -> None:
             CREATE TABLE IF NOT EXISTS users (
                 id BIGSERIAL PRIMARY KEY,
                 username TEXT NOT NULL UNIQUE,
-                hashed_password TEXT NOT NULL,
-                electricity_cost DOUBLE PRECISION NOT NULL DEFAULT 0.1 CHECK (electricity_cost >= 0)
+                hashed_password TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS rigs (
                 id BIGSERIAL PRIMARY KEY,
                 user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                name TEXT NOT NULL
+                name TEXT NOT NULL,
+                coin TEXT NOT NULL DEFAULT '',
+                coin_per_day DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK (coin_per_day >= 0),
+                electricity_cost DOUBLE PRECISION NOT NULL DEFAULT 0.1 CHECK (electricity_cost >= 0)
             );
             CREATE TABLE IF NOT EXISTS coins (
                 id BIGSERIAL PRIMARY KEY,
@@ -75,8 +77,6 @@ def initialize_database() -> None:
                 user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 rig_id BIGINT NOT NULL REFERENCES rigs(id) ON DELETE CASCADE,
                 model TEXT NOT NULL,
-                coin TEXT NOT NULL,
-                income_per_mhs DOUBLE PRECISION NOT NULL CHECK (income_per_mhs >= 0),
                 quantity INTEGER NOT NULL CHECK (quantity > 0),
                 hashrate DOUBLE PRECISION NOT NULL CHECK (hashrate >= 0),
                 power INTEGER NOT NULL CHECK (power >= 0)
@@ -84,6 +84,15 @@ def initialize_database() -> None:
             CREATE INDEX IF NOT EXISTS idx_rigs_user ON rigs(user_id);
             CREATE INDEX IF NOT EXISTS idx_coins_user ON coins(user_id);
             CREATE INDEX IF NOT EXISTS idx_cards_user_rig ON cards(user_id, rig_id);
+
+            -- Миграция со старой схемы: тариф на свет был общим для юзера, монета и
+            -- добыча/MHs были полями карты. Теперь это конфигурация рига целиком.
+            ALTER TABLE rigs ADD COLUMN IF NOT EXISTS coin TEXT NOT NULL DEFAULT '';
+            ALTER TABLE rigs ADD COLUMN IF NOT EXISTS coin_per_day DOUBLE PRECISION NOT NULL DEFAULT 0;
+            ALTER TABLE rigs ADD COLUMN IF NOT EXISTS electricity_cost DOUBLE PRECISION NOT NULL DEFAULT 0.1;
+            ALTER TABLE cards DROP COLUMN IF EXISTS coin;
+            ALTER TABLE cards DROP COLUMN IF EXISTS income_per_mhs;
+            ALTER TABLE users DROP COLUMN IF EXISTS electricity_cost;
             """
         )
 
@@ -142,12 +151,14 @@ class Credentials(BaseModel):
     password: str = Field(min_length=6, max_length=128)
 
 
-class ElectricityUpdate(BaseModel):
-    electricity_cost: float = Field(ge=0, le=100)
-
-
 class RigInput(BaseModel):
     name: str = Field(min_length=1, max_length=80)
+
+
+class RigConfigInput(BaseModel):
+    coin: str = Field(min_length=1, max_length=30)
+    coin_per_day: float = Field(ge=0, le=1000000)
+    electricity_cost: float = Field(ge=0, le=100)
 
 
 class CoinInput(BaseModel):
@@ -158,8 +169,6 @@ class CoinInput(BaseModel):
 class CardInput(BaseModel):
     rig_id: int
     model: str = Field(min_length=1, max_length=80)
-    coin: str = Field(min_length=1, max_length=30)
-    income_per_mhs: float = Field(ge=0, le=1000000)
     quantity: int = Field(ge=1, le=100000)
     hashrate: float = Field(ge=0, le=100000000)
     power: int = Field(ge=0, le=10000000)
@@ -180,14 +189,14 @@ def authorized_user(authorization: str | None = Header(default=None)) -> dict[st
         raise HTTPException(status_code=401, detail="Требуется авторизация")
     claims = decode_token(authorization[7:])
     with database() as connection:
-        user = connection.execute("SELECT id, username, electricity_cost FROM users WHERE id = %s", (claims["sub"],)).fetchone()
+        user = connection.execute("SELECT id, username FROM users WHERE id = %s", (claims["sub"],)).fetchone()
     if user is None:
         raise HTTPException(status_code=401, detail="Пользователь не найден")
     return user
 
 
 def user_payload(user: dict[str, Any]) -> dict[str, Any]:
-    return {"id": user["id"], "username": user["username"], "electricity_cost": user["electricity_cost"]}
+    return {"id": user["id"], "username": user["username"]}
 
 
 @app.post("/api/auth/register", status_code=status.HTTP_201_CREATED)
@@ -195,9 +204,10 @@ def register(credentials: Credentials) -> dict[str, Any]:
     username = credentials.username.strip()
     try:
         with database() as connection:
-            user = connection.execute("INSERT INTO users(username, hashed_password) VALUES (%s, %s) RETURNING id, username, electricity_cost", (username, password_hash(credentials.password))).fetchone()
-            connection.execute("INSERT INTO rigs(user_id, name) VALUES (%s, %s)", (user["id"], "Мой риг"))
+            user = connection.execute("INSERT INTO users(username, hashed_password) VALUES (%s, %s) RETURNING id, username", (username, password_hash(credentials.password))).fetchone()
             connection.execute("INSERT INTO coins(user_id, name, price_usd) VALUES (%s, %s, %s)", (user["id"], "QTC", 0.39))
+            # Дефолтные значения повторяют старый пример из Excel: 2.8 монеты в сутки на риг.
+            connection.execute("INSERT INTO rigs(user_id, name, coin, coin_per_day, electricity_cost) VALUES (%s, %s, %s, %s, %s)", (user["id"], "Мой риг", "QTC", 2.8, 0.1))
     except psycopg.errors.UniqueViolation:
         raise HTTPException(status_code=409, detail="Этот логин уже занят")
     return {"token": create_token(user["id"], user["username"]), "user": user_payload(user)}
@@ -217,23 +227,38 @@ def get_me(user: dict[str, Any] = Depends(authorized_user)) -> dict[str, Any]:
     return user_payload(user)
 
 
-@app.patch("/api/me/electricity")
-def set_electricity(payload: ElectricityUpdate, user: dict[str, Any] = Depends(authorized_user)) -> dict[str, Any]:
-    with database() as connection:
-        connection.execute("UPDATE users SET electricity_cost = %s WHERE id = %s", (payload.electricity_cost, user["id"]))
-    return {"electricity_cost": payload.electricity_cost}
+RIG_FIELDS = "id, name, coin, coin_per_day, electricity_cost"
 
 
 @app.get("/api/rigs")
 def list_rigs(user: dict[str, Any] = Depends(authorized_user)) -> list[dict[str, Any]]:
     with database() as connection:
-        return list(connection.execute("SELECT id, name FROM rigs WHERE user_id = %s ORDER BY id", (user["id"],)).fetchall())
+        return list(connection.execute(f"SELECT {RIG_FIELDS} FROM rigs WHERE user_id = %s ORDER BY id", (user["id"],)).fetchall())
 
 
 @app.post("/api/rigs", status_code=status.HTTP_201_CREATED)
 def create_rig(payload: RigInput, user: dict[str, Any] = Depends(authorized_user)) -> dict[str, Any]:
     with database() as connection:
-        return connection.execute("INSERT INTO rigs(user_id, name) VALUES (%s, %s) RETURNING id, name", (user["id"], payload.name.strip())).fetchone()
+        return connection.execute(f"INSERT INTO rigs(user_id, name) VALUES (%s, %s) RETURNING {RIG_FIELDS}", (user["id"], payload.name.strip())).fetchone()
+
+
+def validate_coin_ownership(connection: psycopg.Connection[Any], coin: str, user_id: int) -> None:
+    if connection.execute("SELECT 1 FROM coins WHERE user_id = %s AND LOWER(name) = LOWER(%s)", (user_id, coin.strip())).fetchone() is None:
+        raise HTTPException(status_code=422, detail="Сначала добавьте эту монету в настройках")
+
+
+@app.patch("/api/rigs/{rig_id}/config")
+def update_rig_config(rig_id: int, payload: RigConfigInput, user: dict[str, Any] = Depends(authorized_user)) -> dict[str, Any]:
+    coin = payload.coin.strip().upper()
+    with database() as connection:
+        validate_coin_ownership(connection, coin, user["id"])
+        row = connection.execute(
+            f"UPDATE rigs SET coin=%s, coin_per_day=%s, electricity_cost=%s WHERE id=%s AND user_id=%s RETURNING {RIG_FIELDS}",
+            (coin, payload.coin_per_day, payload.electricity_cost, rig_id, user["id"]),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Риг не найден")
+        return row
 
 
 @app.delete("/api/rigs/{rig_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -268,7 +293,8 @@ def update_coin(coin_id: int, payload: CoinInput, user: dict[str, Any] = Depends
             if old is None:
                 raise HTTPException(status_code=404, detail="Монета не найдена")
             row = connection.execute("UPDATE coins SET name = %s, price_usd = %s WHERE id = %s AND user_id = %s RETURNING id, name, price_usd", (name, payload.price_usd, coin_id, user["id"])).fetchone()
-            connection.execute("UPDATE cards SET coin = %s WHERE user_id = %s AND LOWER(coin) = LOWER(%s)", (name, user["id"], old["name"]))
+            # Курс переименовали — переносим новое имя в риги, которые майнят эту монету.
+            connection.execute("UPDATE rigs SET coin = %s WHERE user_id = %s AND LOWER(coin) = LOWER(%s)", (name, user["id"], old["name"]))
             return row
     except psycopg.errors.UniqueViolation:
         raise HTTPException(status_code=409, detail="Такая монета уже добавлена")
@@ -280,19 +306,17 @@ def delete_coin(coin_id: int, user: dict[str, Any] = Depends(authorized_user)) -
         coin = connection.execute("SELECT name FROM coins WHERE id = %s AND user_id = %s", (coin_id, user["id"])).fetchone()
         if coin is None:
             raise HTTPException(status_code=404, detail="Монета не найдена")
-        if connection.execute("SELECT 1 FROM cards WHERE user_id = %s AND LOWER(coin) = LOWER(%s) LIMIT 1", (user["id"], coin["name"])).fetchone():
-            raise HTTPException(status_code=409, detail="Нельзя удалить монету, пока она используется в картах")
+        if connection.execute("SELECT 1 FROM rigs WHERE user_id = %s AND LOWER(coin) = LOWER(%s) LIMIT 1", (user["id"], coin["name"])).fetchone():
+            raise HTTPException(status_code=409, detail="Нельзя удалить монету, пока она используется в конфигурации рига")
         connection.execute("DELETE FROM coins WHERE id = %s AND user_id = %s", (coin_id, user["id"]))
 
 
-def validate_ownership(connection: psycopg.Connection[Any], rig_id: int, coin: str, user_id: int) -> None:
+def validate_rig_ownership(connection: psycopg.Connection[Any], rig_id: int, user_id: int) -> None:
     if connection.execute("SELECT 1 FROM rigs WHERE id = %s AND user_id = %s", (rig_id, user_id)).fetchone() is None:
         raise HTTPException(status_code=404, detail="Риг не найден")
-    if connection.execute("SELECT 1 FROM coins WHERE user_id = %s AND LOWER(name) = LOWER(%s)", (user_id, coin.strip())).fetchone() is None:
-        raise HTTPException(status_code=422, detail="Сначала добавьте эту монету в настройках")
 
 
-CARD_FIELDS = "id, rig_id, model, coin, income_per_mhs, quantity, hashrate, power"
+CARD_FIELDS = "id, rig_id, model, quantity, hashrate, power"
 
 
 @app.get("/api/rigs/{rig_id}/cards")
@@ -307,16 +331,16 @@ def list_cards(rig_id: int, user: dict[str, Any] = Depends(authorized_user)) -> 
 def create_card(payload: CardInput, user: dict[str, Any] = Depends(authorized_user)) -> dict[str, Any]:
     data = payload.model_dump()
     with database() as connection:
-        validate_ownership(connection, data["rig_id"], data["coin"], user["id"])
-        return connection.execute(f"INSERT INTO cards(user_id, rig_id, model, coin, income_per_mhs, quantity, hashrate, power) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING {CARD_FIELDS}", (user["id"], data["rig_id"], data["model"], data["coin"].strip().upper(), data["income_per_mhs"], data["quantity"], data["hashrate"], data["power"])).fetchone()
+        validate_rig_ownership(connection, data["rig_id"], user["id"])
+        return connection.execute(f"INSERT INTO cards(user_id, rig_id, model, quantity, hashrate, power) VALUES (%s, %s, %s, %s, %s, %s) RETURNING {CARD_FIELDS}", (user["id"], data["rig_id"], data["model"], data["quantity"], data["hashrate"], data["power"])).fetchone()
 
 
 @app.put("/api/cards/{card_id}")
 def update_card(card_id: int, payload: CardInput, user: dict[str, Any] = Depends(authorized_user)) -> dict[str, Any]:
     data = payload.model_dump()
     with database() as connection:
-        validate_ownership(connection, data["rig_id"], data["coin"], user["id"])
-        row = connection.execute(f"UPDATE cards SET rig_id=%s, model=%s, coin=%s, income_per_mhs=%s, quantity=%s, hashrate=%s, power=%s WHERE id=%s AND user_id=%s RETURNING {CARD_FIELDS}", (data["rig_id"], data["model"], data["coin"].strip().upper(), data["income_per_mhs"], data["quantity"], data["hashrate"], data["power"], card_id, user["id"])).fetchone()
+        validate_rig_ownership(connection, data["rig_id"], user["id"])
+        row = connection.execute(f"UPDATE cards SET rig_id=%s, model=%s, quantity=%s, hashrate=%s, power=%s WHERE id=%s AND user_id=%s RETURNING {CARD_FIELDS}", (data["rig_id"], data["model"], data["quantity"], data["hashrate"], data["power"], card_id, user["id"])).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Карта не найдена")
         return row
