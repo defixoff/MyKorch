@@ -83,7 +83,7 @@ function renderDashboard() {
   document.querySelector('#logout-button').onclick = () => logout(true);
   document.querySelector('#add-rig').onclick = () => showRigModal();
   document.querySelectorAll('.rig-tab').forEach((button) => button.onclick = async () => { state.selectedRigId = Number(button.dataset.rigId); await loadSelectedRig(); renderDashboard(); });
-  document.querySelector('#add-card')?.addEventListener('click', () => showCardModal());
+  document.querySelector('#add-card')?.addEventListener('click', () => { state.editingCardId = null; showCardModal(); });
   document.querySelector('#settings')?.addEventListener('click', showSettingsModal);
   document.querySelector('#delete-rig')?.addEventListener('click', deleteSelectedRig);
   document.querySelectorAll('[data-edit-card]').forEach((button) => button.onclick = () => { state.editingCardId = Number(button.dataset.editCard); showCardModal(state.cards.find((card) => card.id === Number(button.dataset.editCard))); });
@@ -102,22 +102,8 @@ function modal(title, content) {
 }
 
 function showRigModal() {
-  const node = modal('Новый риг', `<form class="space-y-4"><label class="block text-sm font-semibold">Название<input name="name" required maxlength="80" class="mt-1.5 w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2.5 dark:border-slate-700" placeholder="Например, Балкон"></label><button class="w-full rounded-xl bg-emerald-500 py-3 font-bold text-slate-950">Создать риг</button></form>`);
-  node.querySelector('form').onsubmit = async (event) => { event.preventDefault(); try { const rig = await request('/rigs', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))) }); state.selectedRigId = rig.id; node.remove(); await refresh(); toast('Риг создан'); } catch (error) { toast(error.message, 'error'); } };
-}
-
-function showElectricityModal() {
-  const node = modal('Настройки розетки', `<form class="space-y-4"><p class="text-sm text-slate-500">Тариф применяется ко всем картам и ригам.</p><label class="block text-sm font-semibold">Стоимость, $ за кВт·ч<input name="electricity_cost" type="number" min="0" step="0.001" required value="${state.user.electricity_cost}" class="mt-1.5 w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2.5 dark:border-slate-700"></label><button class="w-full rounded-xl bg-emerald-500 py-3 font-bold text-slate-950">Сохранить</button></form>`);
-  node.querySelector('form').onsubmit = async (event) => { event.preventDefault(); try { const data = await request('/me/electricity', { method: 'PATCH', body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))) }); state.user.electricity_cost = data.electricity_cost; node.remove(); renderDashboard(); toast('Тариф обновлён'); } catch (error) { toast(error.message, 'error'); } };
-}
-
-function showCoinsModal() {
-  const rows = state.coins.map((coin) => `<form data-coin-id="${coin.id}" class="grid grid-cols-[1fr_1fr_auto] items-end gap-2 rounded-xl bg-slate-100 p-3 dark:bg-slate-800"><label class="text-xs font-bold text-slate-500">Монета<input name="name" required maxlength="30" value="${escapeHtml(coin.name)}" class="coin-field"></label><label class="text-xs font-bold text-slate-500">Курс, $<input name="price_usd" type="number" required min="0" step="any" value="${coin.price_usd}" class="coin-field"></label><div class="flex gap-1"><button title="Сохранить" class="rounded-lg bg-emerald-500 px-2 py-2 text-sm font-black text-slate-950">✓</button><button type="button" data-delete-coin="${coin.id}" title="Удалить" class="rounded-lg px-2 py-2 text-sm">🗑️</button></div></form>`).join('');
-  const node = modal('Монеты и курсы', `<p class="mb-4 text-sm text-slate-500">Курс в USD применяется ко всем картам с этой монетой сразу.</p><div class="space-y-2">${rows || '<p class="text-sm text-slate-500">Добавьте первую монету.</p>'}</div><form id="new-coin-form" class="mt-4 grid grid-cols-2 gap-2 border-t border-slate-200 pt-4 dark:border-slate-700"><label class="text-xs font-bold text-slate-500">Название<input name="name" required maxlength="30" placeholder="BTC" class="coin-field"></label><label class="text-xs font-bold text-slate-500">Курс, $<input name="price_usd" type="number" required min="0" step="any" placeholder="0.00" class="coin-field"></label><button class="col-span-2 rounded-xl bg-emerald-500 py-2.5 font-bold text-slate-950">＋ Добавить монету</button></form>`);
-  node.querySelectorAll('.coin-field').forEach((input) => input.className = 'coin-field mt-1 w-full rounded-lg border border-slate-300 bg-transparent px-2 py-2 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-emerald-500 dark:border-slate-600 dark:text-slate-100');
-  node.querySelectorAll('[data-coin-id]').forEach((form) => form.onsubmit = async (event) => { event.preventDefault(); try { await request(`/coins/${form.dataset.coinId}`, { method: 'PUT', body: JSON.stringify(Object.fromEntries(new FormData(form))) }); node.remove(); await refresh(); toast('Курс обновлён'); } catch (error) { toast(error.message, 'error'); } });
-  node.querySelectorAll('[data-delete-coin]').forEach((button) => button.onclick = async () => { if (!confirm('Удалить монету?')) return; try { await request(`/coins/${button.dataset.deleteCoin}`, { method: 'DELETE' }); node.remove(); await refresh(); toast('Монета удалена'); } catch (error) { toast(error.message, 'error'); } });
-  node.querySelector('#new-coin-form').onsubmit = async (event) => { event.preventDefault(); try { await request('/coins', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))) }); node.remove(); await refresh(); toast('Монета добавлена'); } catch (error) { toast(error.message, 'error'); } };
+  // Отправку формы полностью обрабатывает глобальный оптимистичный listener (см. ниже).
+  modal('Новый риг', `<form class="space-y-4"><label class="block text-sm font-semibold">Название<input name="name" required maxlength="80" class="mt-1.5 w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2.5 dark:border-slate-700" placeholder="Например, Балкон"></label><button class="w-full rounded-xl bg-emerald-500 py-3 font-bold text-slate-950">Создать риг</button></form>`);
 }
 
 function showSettingsModal() {
@@ -137,13 +123,25 @@ function showCardModal(card = null) {
   const coinOptions = state.coins.map((coin) => `<option value="${escapeHtml(coin.name)}" ${coin.name.toLowerCase() === String(values.coin).toLowerCase() ? 'selected' : ''}>${escapeHtml(coin.name)} · ${money(coin.price_usd)}</option>`).join('');
   const node = modal(isEdit ? 'Редактировать карту' : 'Добавить карту', `<form class="grid gap-3 sm:grid-cols-2"><label class="text-sm font-semibold">Модель<input name="model" required maxlength="80" value="${escapeHtml(values.model)}" class="field"></label><label class="text-sm font-semibold">Монета<select name="coin" required class="field">${coinOptions}</select></label><label class="text-sm font-semibold">Количество<input name="quantity" type="number" required min="1" step="1" value="${values.quantity}" class="field"></label><label class="text-sm font-semibold">Хэш на 1 карту, MH/s<input name="hashrate" type="number" required min="0" step="any" value="${values.hashrate}" class="field"></label><label class="text-sm font-semibold">Мощность на 1 карту, W<input name="power" type="number" required min="0" step="1" value="${values.power}" class="field"></label><label class="text-sm font-semibold">Добыча на 1 MH/s, монет/сутки<input name="income_per_mhs" type="number" required min="0" step="any" value="${values.income_per_mhs}" class="field"></label><p class="sm:col-span-2 rounded-xl bg-slate-100 p-3 text-xs text-slate-500 dark:bg-slate-800">Доход: общий хэш × добыча на 1 MH/s × курс монеты. Excel-значение QTC: 2.8 ÷ 3620 = ${EXCEL_DEFAULT_COIN_PER_MHS.toFixed(9)} QTC/MH/s.</p><button class="sm:col-span-2 rounded-xl bg-emerald-500 py-3 font-bold text-slate-950">${isEdit ? 'Сохранить изменения' : 'Добавить карту'}</button></form>`);
   node.querySelectorAll('.field').forEach((input) => input.className = 'field mt-1.5 w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2.5 outline-none focus:ring-2 focus:ring-emerald-500 dark:border-slate-700');
-  node.querySelector('form').onsubmit = async (event) => { event.preventDefault(); const raw = Object.fromEntries(new FormData(event.currentTarget)); const payload = { ...raw, rig_id: state.selectedRigId, quantity: Number(raw.quantity), hashrate: Number(raw.hashrate), power: Number(raw.power), income_per_mhs: Number(raw.income_per_mhs) }; try { await request(isEdit ? `/cards/${card.id}` : '/cards', { method: isEdit ? 'PUT' : 'POST', body: JSON.stringify(payload) }); node.remove(); await refresh(); toast(isEdit ? 'Карта обновлена' : 'Карта добавлена'); } catch (error) { toast(error.message, 'error'); } };
+  // Отправку формы полностью обрабатывает глобальный оптимистичный listener (см. ниже).
 }
 
 async function deleteCard(cardId) { if (!confirm('Удалить эту карту из рига?')) return; try { await request(`/cards/${cardId}`, { method: 'DELETE' }); await refresh(); toast('Карта удалена'); } catch (error) { toast(error.message, 'error'); } }
 async function deleteSelectedRig() { if (!confirm('Удалить риг и всё оборудование в нём?')) return; try { await request(`/rigs/${state.selectedRigId}`, { method: 'DELETE' }); state.selectedRigId = null; await refresh(); toast('Риг удалён'); } catch (error) { toast(error.message, 'error'); } }
 async function loadSelectedRig() { state.cards = state.selectedRigId ? await request(`/rigs/${state.selectedRigId}/cards`) : []; }
-async function refresh() { state.user = await request('/me'); state.coins = await request('/coins'); state.rigs = await request('/rigs'); if (!state.rigs.some((rig) => rig.id === state.selectedRigId)) state.selectedRigId = state.rigs[0]?.id || null; state.farmCards = (await Promise.all(state.rigs.map((rig) => request(`/rigs/${rig.id}/cards`)))).flat(); await loadSelectedRig(); renderDashboard(); }
+async function refresh() {
+  // /me, /coins и /rigs независимы — запускаем параллельно вместо последовательных await.
+  const [user, coins, rigs] = await Promise.all([request('/me'), request('/coins'), request('/rigs')]);
+  state.user = user; state.coins = coins; state.rigs = rigs;
+  if (!state.rigs.some((rig) => rig.id === state.selectedRigId)) state.selectedRigId = state.rigs[0]?.id || null;
+  // Карты каждого рига запрашиваются параллельно; карты текущего рига берём из этого же набора,
+  // а не отдельным запросом через loadSelectedRig() — риг уже входит в state.rigs.
+  const cardLists = await Promise.all(state.rigs.map((rig) => request(`/rigs/${rig.id}/cards`)));
+  state.farmCards = cardLists.flat();
+  const selectedIndex = state.rigs.findIndex((rig) => rig.id === state.selectedRigId);
+  state.cards = selectedIndex >= 0 ? cardLists[selectedIndex] : [];
+  renderDashboard();
+}
 function logout(showMessage) { state.token = null; state.user = null; state.cards = []; localStorage.removeItem('korch_token'); renderAuth(); if (showMessage) toast('Вы вышли из аккаунта'); }
 
 /* Optimistic UI: modal mutations render immediately and reconcile in background. */
