@@ -86,7 +86,7 @@ function renderDashboard() {
   document.querySelector('#add-card')?.addEventListener('click', () => showCardModal());
   document.querySelector('#settings')?.addEventListener('click', showSettingsModal);
   document.querySelector('#delete-rig')?.addEventListener('click', deleteSelectedRig);
-  document.querySelectorAll('[data-edit-card]').forEach((button) => button.onclick = () => showCardModal(state.cards.find((card) => card.id === Number(button.dataset.editCard))));
+  document.querySelectorAll('[data-edit-card]').forEach((button) => button.onclick = () => { state.editingCardId = Number(button.dataset.editCard); showCardModal(state.cards.find((card) => card.id === Number(button.dataset.editCard))); });
   document.querySelectorAll('[data-delete-card]').forEach((button) => button.onclick = () => deleteCard(Number(button.dataset.deleteCard)));
 }
 
@@ -145,6 +145,81 @@ async function deleteSelectedRig() { if (!confirm('Удалить риг и вс
 async function loadSelectedRig() { state.cards = state.selectedRigId ? await request(`/rigs/${state.selectedRigId}/cards`) : []; }
 async function refresh() { state.user = await request('/me'); state.coins = await request('/coins'); state.rigs = await request('/rigs'); if (!state.rigs.some((rig) => rig.id === state.selectedRigId)) state.selectedRigId = state.rigs[0]?.id || null; state.farmCards = (await Promise.all(state.rigs.map((rig) => request(`/rigs/${rig.id}/cards`)))).flat(); await loadSelectedRig(); renderDashboard(); }
 function logout(showMessage) { state.token = null; state.user = null; state.cards = []; localStorage.removeItem('korch_token'); renderAuth(); if (showMessage) toast('Вы вышли из аккаунта'); }
+
+/* Optimistic UI: modal mutations render immediately and reconcile in background. */
+document.addEventListener('submit', (event) => {
+  const form = event.target;
+  const modalRoot = form.closest('.modal-backdrop');
+  if (!modalRoot) {
+    if (form.id === 'auth-form') {
+      const submit = form.querySelector('button[type="submit"], button:not([type])');
+      if (submit) { submit.disabled = true; submit.dataset.originalText = submit.textContent; submit.textContent = 'Подключаемся…'; }
+    }
+    return;
+  }
+  const raw = Object.fromEntries(new FormData(form));
+  if (form.querySelector('[name="income_per_mhs"]')) {
+    event.preventDefault(); event.stopImmediatePropagation();
+    const title = form.closest('.modal-panel')?.querySelector('h2')?.textContent || '';
+    const isEdit = /редакт/i.test(title);
+    const values = { ...raw, rig_id: state.selectedRigId, quantity: Number(raw.quantity), hashrate: Number(raw.hashrate), power: Number(raw.power), income_per_mhs: Number(raw.income_per_mhs) };
+    const existing = isEdit ? state.cards.find((card) => card.id === state.editingCardId) : null;
+    const tempId = `optimistic-card-${Date.now()}`;
+    const previousCards = [...state.cards]; const previousFarm = [...(state.farmCards || [])];
+    const optimistic = { ...values, id: existing?.id || tempId };
+    state.cards = existing ? state.cards.map((card) => card.id === existing.id ? optimistic : card) : [...state.cards, optimistic];
+    state.farmCards = existing ? state.farmCards.map((card) => card.id === existing.id ? optimistic : card) : [...(state.farmCards || []), optimistic];
+    modalRoot.remove(); renderDashboard(); toast(existing ? 'Карта обновлена' : 'Карта добавлена');
+    const path = existing ? `/cards/${existing.id}` : '/cards'; state.editingCardId = null;
+    request(path, { method: existing ? 'PUT' : 'POST', body: JSON.stringify(values) }).then((saved) => {
+      state.cards = state.cards.map((card) => card.id === optimistic.id ? saved : card);
+      state.farmCards = state.farmCards.map((card) => card.id === optimistic.id ? saved : card);
+      renderDashboard();
+    }).catch((error) => { state.cards = previousCards; state.farmCards = previousFarm; renderDashboard(); toast(`Изменения карты отменены: ${error.message}`, 'error'); });
+    return;
+  }
+  if (form.id === 'settings-power-form') {
+    event.preventDefault(); event.stopImmediatePropagation();
+    const nextCost = Number(raw.electricity_cost); const previousCost = state.user.electricity_cost;
+    state.user.electricity_cost = nextCost; modalRoot.remove(); renderDashboard(); toast('Тариф обновлён');
+    request('/me/electricity', { method: 'PATCH', body: JSON.stringify({ electricity_cost: nextCost }) }).catch((error) => { state.user.electricity_cost = previousCost; renderDashboard(); toast(`Тариф не сохранён: ${error.message}`, 'error'); });
+    return;
+  }
+  if (form.id === 'settings-new-coin') {
+    event.preventDefault(); event.stopImmediatePropagation();
+    const optimisticId = `optimistic-coin-${Date.now()}`; const optimisticCoin = { id: optimisticId, name: String(raw.name).trim().toUpperCase(), price_usd: Number(raw.price_usd) }; const previousCoins = [...state.coins];
+    state.coins = [...state.coins, optimisticCoin]; modalRoot.remove(); renderDashboard(); toast('Монета добавлена');
+    request('/coins', { method: 'POST', body: JSON.stringify({ name: optimisticCoin.name, price_usd: optimisticCoin.price_usd }) }).then((saved) => { state.coins = state.coins.map((coin) => coin.id === optimisticId ? saved : coin); }).catch((error) => { state.coins = previousCoins; renderDashboard(); toast(`Монета не сохранена: ${error.message}`, 'error'); });
+    return;
+  }
+  if (form.dataset.settingsCoin) {
+    event.preventDefault(); event.stopImmediatePropagation();
+    const coinId = form.dataset.settingsCoin; const previousCoins = [...state.coins]; const previousCards = [...state.cards]; const previousFarm = [...(state.farmCards || [])]; const oldCoin = state.coins.find((coin) => String(coin.id) === String(coinId)); const nextCoin = { ...oldCoin, name: String(raw.name).trim().toUpperCase(), price_usd: Number(raw.price_usd) };
+    state.coins = state.coins.map((coin) => String(coin.id) === String(coinId) ? nextCoin : coin); state.cards = state.cards.map((card) => card.coin.toLowerCase() === oldCoin.name.toLowerCase() ? { ...card, coin: nextCoin.name } : card); state.farmCards = state.farmCards.map((card) => card.coin.toLowerCase() === oldCoin.name.toLowerCase() ? { ...card, coin: nextCoin.name } : card);
+    modalRoot.remove(); renderDashboard(); toast('Курс обновлён');
+    request(`/coins/${coinId}`, { method: 'PUT', body: JSON.stringify({ name: nextCoin.name, price_usd: nextCoin.price_usd }) }).catch((error) => { state.coins = previousCoins; state.cards = previousCards; state.farmCards = previousFarm; renderDashboard(); toast(`Курс не сохранён: ${error.message}`, 'error'); });
+    return;
+  }
+  if (form.querySelector('[name="name"]') && form.closest('.modal-panel') && !form.dataset.settingsCoin && form.id !== 'settings-new-coin') {
+    event.preventDefault(); event.stopImmediatePropagation();
+    const name = String(raw.name || '').trim(); if (!name) return;
+    const tempId = `optimistic-rig-${Date.now()}`; const previousRigs = [...state.rigs]; const previousSelected = state.selectedRigId;
+    state.rigs = [...state.rigs, { id: tempId, name }]; state.selectedRigId = tempId; state.cards = [];
+    modalRoot.remove(); renderDashboard(); toast('Риг добавлен');
+    request('/rigs', { method: 'POST', body: JSON.stringify({ name }) }).then((saved) => { state.rigs = state.rigs.map((rig) => rig.id === tempId ? saved : rig); state.selectedRigId = saved.id; renderDashboard(); }).catch((error) => { state.rigs = previousRigs; state.selectedRigId = previousSelected; renderDashboard(); toast(`Риг не сохранён: ${error.message}`, 'error'); });
+    return;
+  }
+}, true);
+
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-settings-delete]');
+  if (!button) return;
+  event.preventDefault(); event.stopImmediatePropagation();
+  if (!confirm('Удалить монету?')) return;
+  const coinId = button.dataset.settingsDelete; const previousCoins = [...state.coins]; const removed = state.coins.find((coin) => String(coin.id) === String(coinId));
+  state.coins = state.coins.filter((coin) => String(coin.id) !== String(coinId)); const modalRoot = button.closest('.modal-backdrop'); modalRoot?.remove(); renderDashboard(); toast('Монета удалена');
+  request(`/coins/${coinId}`, { method: 'DELETE' }).catch((error) => { state.coins = previousCoins; renderDashboard(); toast(`Монета не удалена: ${error.message}`, 'error'); });
+}, true);
 
 async function init() { applyTheme(); if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {}); if (!state.token) return renderAuth(); try { await refresh(); } catch (error) { toast(error.message, 'error'); } }
 init();

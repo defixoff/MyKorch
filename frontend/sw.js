@@ -1,7 +1,7 @@
-const CACHE_NAME = 'moy-korch-v5';
+const CACHE_NAME = 'moy-korch-v7';
 // Query-versioning forces a new worker to fetch current assets instead of
 // inheriting a same-name response from the previous worker's cache.
-const STATIC_FILES = ['/index.html?v=5', '/app.js?v=5', '/styles.css?v=5', '/manifest.json?v=5', '/icon.svg?v=5'];
+const STATIC_FILES = ['/index.html?v=7', '/app.js?v=7', '/styles.css?v=7', '/manifest.json?v=7', '/icon.svg?v=7'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_FILES)).then(() => self.skipWaiting()));
