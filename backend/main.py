@@ -247,7 +247,7 @@ def delete_rig(rig_id: int, user: dict[str, Any] = Depends(authorized_user)) -> 
 @app.get("/api/coins")
 def list_coins(user: dict[str, Any] = Depends(authorized_user)) -> list[dict[str, Any]]:
     with database() as connection:
-        return list(connection.execute("SELECT id, name, price_usd FROM coins WHERE user_id = %s ORDER BY name", (user["id"])).fetchall())
+        return list(connection.execute("SELECT id, name, price_usd FROM coins WHERE user_id = %s ORDER BY name", (user["id"],)).fetchall())
 
 
 @app.post("/api/coins", status_code=status.HTTP_201_CREATED)
