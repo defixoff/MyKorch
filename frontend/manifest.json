@@ -1,0 +1,11 @@
+{
+  "name": "Мой корч",
+  "short_name": "Корч",
+  "description": "Персональный майнинг-калькулятор",
+  "display": "standalone",
+  "orientation": "portrait",
+  "start_url": "/index.html",
+  "background_color": "#0b1120",
+  "theme_color": "#0b1120",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

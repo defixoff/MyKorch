@@ -1,0 +1,14 @@
+services:
+  korch:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      KORCH_JWT_SECRET: "replace-with-a-long-random-secret"
+      KORCH_DATABASE: "/app/backend/data/korch.db"
+    volumes:
+      - korch_data:/app/backend/data
+
+volumes:
+  korch_data:
