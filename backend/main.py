@@ -90,12 +90,25 @@ def initialize_database() -> None:
             ALTER TABLE rigs ADD COLUMN IF NOT EXISTS coin TEXT NOT NULL DEFAULT '';
             ALTER TABLE rigs ADD COLUMN IF NOT EXISTS coin_per_day DOUBLE PRECISION NOT NULL DEFAULT 0;
             ALTER TABLE rigs ADD COLUMN IF NOT EXISTS electricity_cost DOUBLE PRECISION NOT NULL DEFAULT 0.1;
-            -- Раздел конфигурации "Время": сколько рабочих (18ч) и выходных (24ч) суток в
-            -- цикле, и на каких днях основано введённое значение coin_per_day — используется
-            -- для расчёта средней добычи монеты в сутки (см. app.js averageCoinPerDay).
-            ALTER TABLE rigs ADD COLUMN IF NOT EXISTS work_days INTEGER NOT NULL DEFAULT 5;
-            ALTER TABLE rigs ADD COLUMN IF NOT EXISTS rest_days INTEGER NOT NULL DEFAULT 2;
-            ALTER TABLE rigs ADD COLUMN IF NOT EXISTS time_basis TEXT NOT NULL DEFAULT 'work';
+            -- Раздел конфигурации "Время": сколько рабочих суток (working_day_duration = 18ч
+            -- каждая) и выходных суток (weekend_day_duration = 24ч каждая) в цикле, и какой
+            -- calculation_mode использовать — итоговое avg_daily_yield (средняя добыча монеты
+            -- в сутки) считается в app.js (см. avgDailyYield) и используется во всех формулах
+            -- дохода/профита вместо "сырого" coin_per_day.
+            ALTER TABLE rigs ADD COLUMN IF NOT EXISTS working_days INTEGER NOT NULL DEFAULT 5;
+            ALTER TABLE rigs ADD COLUMN IF NOT EXISTS weekend_days INTEGER NOT NULL DEFAULT 2;
+            ALTER TABLE rigs ADD COLUMN IF NOT EXISTS calculation_mode TEXT NOT NULL DEFAULT 'working_days';
+            -- Миграция со старой схемы work_days/rest_days/time_basis на новую (см. выше).
+            DO $$
+            BEGIN
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'rigs' AND column_name = 'work_days') THEN
+                    UPDATE rigs SET working_days = work_days, weekend_days = rest_days,
+                        calculation_mode = CASE WHEN time_basis = 'rest' THEN 'weekend_days' ELSE 'working_days' END;
+                    ALTER TABLE rigs DROP COLUMN work_days;
+                    ALTER TABLE rigs DROP COLUMN rest_days;
+                    ALTER TABLE rigs DROP COLUMN time_basis;
+                END IF;
+            END $$;
             ALTER TABLE cards DROP COLUMN IF EXISTS coin;
             ALTER TABLE cards DROP COLUMN IF EXISTS income_per_mhs;
             ALTER TABLE users DROP COLUMN IF EXISTS electricity_cost;
@@ -165,12 +178,12 @@ class RigConfigInput(BaseModel):
     coin: str = Field(min_length=1, max_length=30)
     coin_per_day: float = Field(ge=0, le=1000000)
     electricity_cost: float = Field(ge=0, le=100)
-    # Раздел "Время": рабочие сутки — 18 часов, выходные — 24 часа (фиксированные
-    # константы, см. app.js). work_days/rest_days — сколько таких суток в цикле;
-    # time_basis — на каких из них измерено введённое coin_per_day.
-    work_days: int = Field(ge=0, le=31)
-    rest_days: int = Field(ge=0, le=31)
-    time_basis: str = Field(pattern=r"^(work|rest)$")
+    # Раздел "Время": working_day_duration = 18ч, weekend_day_duration = 24ч (фиксированные
+    # константы, см. app.js). working_days/weekend_days — сколько таких суток в цикле;
+    # calculation_mode — какой режим расчёта avg_daily_yield использовать.
+    working_days: int = Field(ge=0, le=31)
+    weekend_days: int = Field(ge=0, le=31)
+    calculation_mode: str = Field(pattern=r"^(working_days|weekend_days)$")
 
 
 class CoinInput(BaseModel):
@@ -239,7 +252,7 @@ def get_me(user: dict[str, Any] = Depends(authorized_user)) -> dict[str, Any]:
     return user_payload(user)
 
 
-RIG_FIELDS = "id, name, coin, coin_per_day, electricity_cost, work_days, rest_days, time_basis"
+RIG_FIELDS = "id, name, coin, coin_per_day, electricity_cost, working_days, weekend_days, calculation_mode"
 
 
 @app.get("/api/rigs")
@@ -265,8 +278,8 @@ def update_rig_config(rig_id: int, payload: RigConfigInput, user: dict[str, Any]
     with database() as connection:
         validate_coin_ownership(connection, coin, user["id"])
         row = connection.execute(
-            f"UPDATE rigs SET coin=%s, coin_per_day=%s, electricity_cost=%s, work_days=%s, rest_days=%s, time_basis=%s WHERE id=%s AND user_id=%s RETURNING {RIG_FIELDS}",
-            (coin, payload.coin_per_day, payload.electricity_cost, payload.work_days, payload.rest_days, payload.time_basis, rig_id, user["id"]),
+            f"UPDATE rigs SET coin=%s, coin_per_day=%s, electricity_cost=%s, working_days=%s, weekend_days=%s, calculation_mode=%s WHERE id=%s AND user_id=%s RETURNING {RIG_FIELDS}",
+            (coin, payload.coin_per_day, payload.electricity_cost, payload.working_days, payload.weekend_days, payload.calculation_mode, rig_id, user["id"]),
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Риг не найден")

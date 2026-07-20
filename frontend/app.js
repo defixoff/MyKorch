@@ -1,36 +1,49 @@
 /* Математика:
  * общий хэш рига = сумма (hashrate × quantity) по всем картам рига;
  * общая мощность рига = сумма (power × quantity) по всем картам рига;
- * добыча на 1 MH/s = coin_per_day (задаётся в конфигурации рига) ÷ общий хэш рига — считается
- * автоматически, а не берётся из готовых Excel-значений;
+ * добыча на 1 MH/s = avg_daily_yield (см. ниже) ÷ общий хэш рига — считается автоматически,
+ * а не берётся из готовых Excel-значений;
  *
- * Раздел конфигурации "Время": рабочие сутки рига — 18 часов, выходные — 24 часа (константы
- * TIME_HOURS ниже). В конфигурации задаются work_days/rest_days (сколько таких суток в цикле,
- * по умолчанию 5 и 2) и time_basis — на каких из них измерено введённое coin_per_day:
- *   - time_basis = 'work': coin_per_day — это ставка за 24 часа непрерывной работы; в рабочие
- *     сутки риг реально работает 18 из 24 часов, поэтому добыча в такие сутки урезается —
- *     coin_per_day ÷ 24 × 18, в выходные — берётся as is (риг работает все 24 часа);
- *   - time_basis = 'rest': coin_per_day — это уже добыча за рабочие сутки (18 часов); в выходные,
- *     когда риг работает все 24 часа, добыча пересчитывается вверх — coin_per_day ÷ 18 × 24.
- * averageCoinPerDay = средневзвешенное по циклу (work_days + rest_days) — именно оно, а не
- * "сырой" coin_per_day, идёт в формулы дохода/профита ниже.
+ * Раздел конфигурации "Время": working_days/weekend_days — сколько рабочих и выходных суток
+ * в цикле (по умолчанию 5 и 2); working_day_duration = 18ч и weekend_day_duration = 24ч —
+ * фиксированные константы (см. TIME ниже); calculation_mode — какой режим расчёта
+ * avg_daily_yield использовать.
  *
- * доход рига (грязный) = averageCoinPerDay × курс монеты; электричество = общая мощность / 1000 × 24 × цена за розетку;
+ * 1) Базовая добыча по рабочим суткам (yield_working): coin_per_day — ставка за 24 часа
+ *    непрерывной работы; в рабочие сутки риг реально работает working_day_duration из 24
+ *    часов, поэтому добыча в такие сутки урезается — coin_per_day ÷ 24 × working_day_duration,
+ *    в выходные — берётся as is (риг работает все weekend_day_duration = 24 часа).
+ *    yield_working = ((coin_per_day ÷ 24 × working_day_duration × working_days)
+ *                      + (coin_per_day × weekend_days)) ÷ (working_days + weekend_days)
+ *
+ * 2) Итоговая средняя добыча в сутки (avg_daily_yield) зависит от calculation_mode:
+ *    - 'working_days': avg_daily_yield = yield_working — как есть, coin_per_day уже привязан
+ *      к рабочим суткам;
+ *    - 'weekend_days': yield_working пересчитывается вверх до полной 24-часовой (выходной)
+ *      ставки и снова усредняется по циклу —
+ *      avg_daily_yield = ((yield_working × working_days)
+ *                          + (yield_working ÷ working_day_duration × weekend_day_duration × weekend_days))
+ *                         ÷ (working_days + weekend_days)
+ *
+ * avg_daily_yield — именно оно, а не "сырой" coin_per_day, идёт в формулы дохода/профита ниже.
+ *
+ * доход рига (грязный) = avg_daily_yield × курс монеты; электричество = общая мощность / 1000 × 24 × цена за розетку;
  * профит рига (чистый) = доход − электричество. Профит фермы — сумма профитов всех ригов.
  */
-const TIME_HOURS = { work: 18, rest: 24 };
+const TIME = { workingDayDuration: 18, weekendDayDuration: 24 };
 
 // Средняя добыча монеты в сутки с учётом графика работы рига (см. комментарий выше).
-function averageCoinPerDay(rig) {
-  const base = Number(rig?.coin_per_day || 0);
-  const workDays = Number(rig?.work_days ?? 5);
-  const restDays = Number(rig?.rest_days ?? 2);
-  const totalDays = workDays + restDays;
-  if (totalDays <= 0) return base;
-  if (rig?.time_basis === 'rest') {
-    return (base * workDays + (base / TIME_HOURS.work) * TIME_HOURS.rest * restDays) / totalDays;
+function avgDailyYield(rig) {
+  const coinsPerDay = Number(rig?.coin_per_day || 0);
+  const workingDays = Number(rig?.working_days ?? 5);
+  const weekendDays = Number(rig?.weekend_days ?? 2);
+  const totalDays = workingDays + weekendDays;
+  if (totalDays <= 0) return coinsPerDay;
+  const yieldWorking = ((coinsPerDay / 24 * TIME.workingDayDuration * workingDays) + (coinsPerDay * weekendDays)) / totalDays;
+  if (rig?.calculation_mode === 'weekend_days') {
+    return ((yieldWorking * workingDays) + (yieldWorking / TIME.workingDayDuration * TIME.weekendDayDuration * weekendDays)) / totalDays;
   }
-  return ((base / TIME_HOURS.rest) * TIME_HOURS.work * workDays + base * restDays) / totalDays;
+  return yieldWorking;
 }
 const configuredApi = window.localStorage.getItem('korch_api_url') || new URLSearchParams(window.location.search).get('api');
 const sameOriginBackend = !window.location.port || window.location.port === '8000';
@@ -59,10 +72,11 @@ function coinRate(coinName) {
 function rigCalculation(rig, cards) {
   const totalHashrate = cards.reduce((sum, card) => sum + Number(card.hashrate) * Number(card.quantity), 0);
   const totalPower = cards.reduce((sum, card) => sum + Number(card.power) * Number(card.quantity), 0);
-  const incomePerMhs = totalHashrate > 0 ? Number(rig?.coin_per_day || 0) / totalHashrate : 0;
+  const dailyYield = avgDailyYield(rig);
+  const incomePerMhs = totalHashrate > 0 ? dailyYield / totalHashrate : 0;
   const grossIncome = totalHashrate * incomePerMhs * coinRate(rig?.coin);
   const electricityExpense = (totalPower / 1000) * 24 * Number(rig?.electricity_cost || 0);
-  return { totalHashrate, totalPower, incomePerMhs, grossIncome, electricityExpense, profit: grossIncome - electricityExpense };
+  return { totalHashrate, totalPower, dailyYield, incomePerMhs, grossIncome, electricityExpense, profit: grossIncome - electricityExpense };
 }
 
 async function request(path, options = {}) {
@@ -131,7 +145,7 @@ function renderDashboard() {
   const farmTotals = state.rigs.reduce((sum, rig) => { const result = rigCalculation(rig, state.cardsByRig[rig.id] || []); sum.profit += result.profit; sum.electricityExpense += result.electricityExpense; return sum; }, { profit: 0, electricityExpense: 0 });
   const selectedRig = state.rigs.find((rig) => rig.id === state.selectedRigId);
   const rigTotals = selectedRig ? rigCalculation(selectedRig, state.cards) : { profit: 0, electricityExpense: 0, incomePerMhs: 0 };
-  const rigSubtitle = selectedRig ? (selectedRig.coin ? `${escapeHtml(selectedRig.coin)} · ${number(selectedRig.coin_per_day, 6)}/сутки · ⚡ ${money(selectedRig.electricity_cost)}/кВт·ч` : 'Конфигурация не задана — нажмите «Конфигурация»') : '';
+  const rigSubtitle = selectedRig ? (selectedRig.coin ? `${escapeHtml(selectedRig.coin)} · ${number(avgDailyYield(selectedRig), 6)}/сутки в среднем · ⚡ ${money(selectedRig.electricity_cost)}/кВт·ч` : 'Конфигурация не задана — нажмите «Конфигурация»') : '';
   app.innerHTML = `<div class="page-enter mx-auto min-h-screen max-w-6xl p-4 sm:p-7"><header class="mb-7 flex flex-wrap items-center justify-between gap-3"><div><p class="text-xs font-bold uppercase tracking-[.2em] text-emerald-500">${escapeHtml(state.user.username)}</p><h1 class="text-2xl font-black sm:text-3xl">Мой корч</h1></div><div class="flex flex-wrap justify-end gap-2 sm:gap-3"><button id="settings" class="rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm font-bold dark:border-slate-700">⚙️ Настройки</button><button id="logout-button" class="rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm font-bold dark:border-slate-700">Выйти</button></div></header><section class="grid gap-3 sm:gap-4 sm:grid-cols-2"><article class="stat-card rise-in rounded-2xl bg-emerald-500 p-5 text-slate-950 shadow-lg"><p class="text-sm font-bold opacity-75">Чистый профит · вся ферма</p><p class="mt-2 text-3xl font-black">${money(farmTotals.profit)}</p><p class="mt-1 text-sm font-medium">за 24 часа</p></article><article class="stat-card rise-in rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900" style="animation-delay:40ms"><p class="text-sm font-bold text-slate-500 dark:text-slate-400">Расходы на свет · вся ферма</p><p class="mt-2 text-3xl font-black">${money(farmTotals.electricityExpense)}</p><p class="mt-1 text-sm text-slate-500">за 24 часа</p></article></section><section class="mt-7 sm:mt-8"><div class="mb-3 flex flex-wrap items-center justify-between gap-2"><h2 class="font-bold">Риги</h2><button id="add-rig" class="rounded-xl bg-slate-900 px-3.5 py-2.5 text-sm font-bold text-white dark:bg-slate-100 dark:text-slate-950">＋ Добавить риг</button></div><div class="scroll-row flex gap-2.5 overflow-x-auto pb-2">${state.rigs.map((rig) => `<button data-rig-id="${rig.id}" class="rig-tab shrink-0 rounded-xl px-4 py-2.5 text-sm font-bold ${rig.id === state.selectedRigId ? 'bg-emerald-500 text-slate-950 tab-pop' : 'border border-slate-300 dark:border-slate-700'}">${escapeHtml(rig.name)}</button>`).join('') || '<p class="text-slate-500">Ригов пока нет.</p>'}</div></section><section class="mt-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6"><div class="mb-5 flex flex-wrap items-start justify-between gap-3"><div><p class="text-xs font-bold uppercase tracking-wider text-slate-500">Текущий риг</p><h2 class="text-xl font-black">${escapeHtml(selectedRig?.name || 'Не выбран')}</h2>${selectedRig ? `<p class="mt-1 text-sm text-slate-500">${rigSubtitle}</p>` : ''}</div>${selectedRig ? `<button id="delete-rig" class="shrink-0 rounded-lg px-2.5 py-1.5 text-sm font-semibold text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40">Удалить риг</button>` : ''}</div><div id="card-list" class="space-y-3">${state.cards.length ? state.cards.map((card, index) => cardHtml(card, index)).join('') : `<div class="rounded-xl border border-dashed border-slate-300 p-8 text-center text-slate-500 dark:border-slate-700">В этом риге ещё нет оборудования.</div>`}</div>${selectedRig ? `<footer class="mt-6 flex flex-col gap-4 border-t border-slate-200 pt-5 dark:border-slate-800 sm:flex-row sm:items-center sm:justify-between"><div><p class="text-sm text-slate-500">Итого по ригу · 24 часа</p><p class="text-xl font-black text-emerald-500">${money(rigTotals.profit)} <span class="text-sm font-medium text-slate-500">/ свет ${money(rigTotals.electricityExpense)}</span></p></div><div class="flex flex-wrap gap-2 sm:gap-3"><button id="rig-config" class="rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm font-bold dark:border-slate-700">⚙️ Конфигурация</button><button id="add-card" class="rounded-xl bg-emerald-500 px-3.5 py-2.5 text-sm font-bold text-slate-950">＋ Добавить карту</button></div></footer>` : ''}</section></div>`;
   document.querySelector('#logout-button').onclick = () => logout(true);
   document.querySelector('#add-rig').onclick = () => showRigModal();
@@ -166,7 +180,7 @@ function showRigConfigModal(rig) {
   if (!rig) return;
   if (!state.coins.length) return toast('Сначала добавьте хотя бы одну монету в настройках', 'error');
   const coinOptions = state.coins.map((coin) => `<option value="${escapeHtml(coin.name)}" ${coin.name.toLowerCase() === String(rig.coin || '').toLowerCase() ? 'selected' : ''}>${escapeHtml(coin.name)} · ${money(coin.price_usd)}</option>`).join('');
-  const node = modal(`Конфигурация: ${escapeHtml(rig.name)}`, `<form data-rig-config="${rig.id}" class="space-y-4"><label class="block text-sm font-semibold">Монета<select name="coin" required class="field">${coinOptions}</select></label><label class="block text-sm font-semibold">Добыча монет в сутки, весь риг<input name="coin_per_day" type="number" min="0" step="any" required value="${rig.coin_per_day ?? 0}" class="field"></label><label class="block text-sm font-semibold">Цена за розетку, $ за кВт·ч<input name="electricity_cost" type="number" min="0" step="0.001" required value="${rig.electricity_cost ?? 0}" class="field"></label><p class="rounded-xl bg-slate-100 p-3 text-xs text-slate-500 dark:bg-slate-800">Доход на 1 MH/s считается автоматически: монет в сутки ÷ суммарный хешрейт всех карт этого рига. Значения в код не зашиты.</p><button class="w-full rounded-xl bg-emerald-500 py-3 font-bold text-slate-950">Сохранить конфигурацию</button></form>`);
+  const node = modal(`Конфигурация: ${escapeHtml(rig.name)}`, `<form data-rig-config="${rig.id}" class="space-y-4"><label class="block text-sm font-semibold">Монета<select name="coin" required class="field">${coinOptions}</select></label><label class="block text-sm font-semibold">Добыча монет в сутки, весь риг<input name="coin_per_day" type="number" min="0" step="any" required value="${rig.coin_per_day ?? 0}" class="field"></label><label class="block text-sm font-semibold">Цена за розетку, $ за кВт·ч<input name="electricity_cost" type="number" min="0" step="0.001" required value="${rig.electricity_cost ?? 0}" class="field"></label><div class="rounded-xl bg-slate-100 p-3.5 dark:bg-slate-800"><p class="mb-3 text-sm font-bold">⏱️ Время</p><div class="grid grid-cols-2 gap-2.5"><label class="text-xs font-bold text-slate-500">Рабочих суток в цикле · 18ч<input name="working_days" type="number" min="0" max="31" step="1" required value="${rig.working_days ?? 5}" class="field mt-1"></label><label class="text-xs font-bold text-slate-500">Выходных суток в цикле · 24ч<input name="weekend_days" type="number" min="0" max="31" step="1" required value="${rig.weekend_days ?? 2}" class="field mt-1"></label></div><label class="mt-2.5 block text-xs font-bold text-slate-500">Введённая добыча в сутки основана на<select name="calculation_mode" required class="field mt-1"><option value="working_days" ${rig.calculation_mode !== 'weekend_days' ? 'selected' : ''}>Рабочих сутках (18ч)</option><option value="weekend_days" ${rig.calculation_mode === 'weekend_days' ? 'selected' : ''}>Выходных сутках (24ч)</option></select></label></div><p class="rounded-xl bg-slate-100 p-3 text-xs text-slate-500 dark:bg-slate-800">Средняя добыча в сутки считается автоматически по графику работы рига, а доход на 1 MH/s — от неё ÷ суммарный хешрейт всех карт этого рига. Значения в код не зашиты.</p><button class="w-full rounded-xl bg-emerald-500 py-3 font-bold text-slate-950">Сохранить конфигурацию</button></form>`);
   node.querySelectorAll('.field').forEach((input) => input.className = 'field mt-1.5 w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2.5 outline-none focus:ring-2 focus:ring-emerald-500 dark:border-slate-700');
   // Отправку формы полностью обрабатывает глобальный оптимистичный listener (см. ниже).
 }
@@ -287,10 +301,10 @@ document.addEventListener('submit', (event) => {
   if (form.dataset.rigConfig) {
     event.preventDefault(); event.stopImmediatePropagation();
     const rigId = form.dataset.rigConfig; const previousRigs = [...state.rigs];
-    const nextRig = { ...state.rigs.find((rig) => String(rig.id) === String(rigId)), coin: String(raw.coin).trim().toUpperCase(), coin_per_day: Number(raw.coin_per_day), electricity_cost: Number(raw.electricity_cost) };
+    const nextRig = { ...state.rigs.find((rig) => String(rig.id) === String(rigId)), coin: String(raw.coin).trim().toUpperCase(), coin_per_day: Number(raw.coin_per_day), electricity_cost: Number(raw.electricity_cost), working_days: Number(raw.working_days), weekend_days: Number(raw.weekend_days), calculation_mode: String(raw.calculation_mode) };
     state.rigs = state.rigs.map((rig) => String(rig.id) === String(rigId) ? nextRig : rig);
     closeModal(modalRoot); renderDashboard(); toast('Конфигурация сохранена');
-    request(`/rigs/${rigId}/config`, { method: 'PATCH', body: JSON.stringify({ coin: nextRig.coin, coin_per_day: nextRig.coin_per_day, electricity_cost: nextRig.electricity_cost }) }).then((saved) => {
+    request(`/rigs/${rigId}/config`, { method: 'PATCH', body: JSON.stringify({ coin: nextRig.coin, coin_per_day: nextRig.coin_per_day, electricity_cost: nextRig.electricity_cost, working_days: nextRig.working_days, weekend_days: nextRig.weekend_days, calculation_mode: nextRig.calculation_mode }) }).then((saved) => {
       state.rigs = state.rigs.map((rig) => String(rig.id) === String(rigId) ? saved : rig); renderDashboard();
     }).catch((error) => { state.rigs = previousRigs; renderDashboard(); toast(`Конфигурация не сохранена: ${error.message}`, 'error'); });
     return;
@@ -299,7 +313,7 @@ document.addEventListener('submit', (event) => {
     event.preventDefault(); event.stopImmediatePropagation();
     const name = String(raw.name || '').trim(); if (!name) return;
     const tempId = `optimistic-rig-${Date.now()}`; const previousRigs = [...state.rigs]; const previousSelected = state.selectedRigId;
-    state.rigs = [...state.rigs, { id: tempId, name, coin: '', coin_per_day: 0, electricity_cost: 0.1 }]; state.selectedRigId = tempId; state.cards = []; state.cardsByRig[tempId] = [];
+    state.rigs = [...state.rigs, { id: tempId, name, coin: '', coin_per_day: 0, electricity_cost: 0.1, working_days: 5, weekend_days: 2, calculation_mode: 'working_days' }]; state.selectedRigId = tempId; state.cards = []; state.cardsByRig[tempId] = [];
     closeModal(modalRoot); renderDashboard(); toast('Риг добавлен');
     request('/rigs', { method: 'POST', body: JSON.stringify({ name }) }).then((saved) => {
       state.rigs = state.rigs.map((rig) => rig.id === tempId ? saved : rig);
