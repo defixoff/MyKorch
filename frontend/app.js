@@ -3,9 +3,35 @@
  * общая мощность рига = сумма (power × quantity) по всем картам рига;
  * добыча на 1 MH/s = coin_per_day (задаётся в конфигурации рига) ÷ общий хэш рига — считается
  * автоматически, а не берётся из готовых Excel-значений;
- * доход рига = coin_per_day × курс монеты; электричество = общая мощность / 1000 × 24 × цена за розетку;
- * профит рига = доход − электричество. Профит фермы — сумма профитов всех ригов.
+ *
+ * Раздел конфигурации "Время": рабочие сутки рига — 18 часов, выходные — 24 часа (константы
+ * TIME_HOURS ниже). В конфигурации задаются work_days/rest_days (сколько таких суток в цикле,
+ * по умолчанию 5 и 2) и time_basis — на каких из них измерено введённое coin_per_day:
+ *   - time_basis = 'work': coin_per_day — это ставка за 24 часа непрерывной работы; в рабочие
+ *     сутки риг реально работает 18 из 24 часов, поэтому добыча в такие сутки урезается —
+ *     coin_per_day ÷ 24 × 18, в выходные — берётся as is (риг работает все 24 часа);
+ *   - time_basis = 'rest': coin_per_day — это уже добыча за рабочие сутки (18 часов); в выходные,
+ *     когда риг работает все 24 часа, добыча пересчитывается вверх — coin_per_day ÷ 18 × 24.
+ * averageCoinPerDay = средневзвешенное по циклу (work_days + rest_days) — именно оно, а не
+ * "сырой" coin_per_day, идёт в формулы дохода/профита ниже.
+ *
+ * доход рига (грязный) = averageCoinPerDay × курс монеты; электричество = общая мощность / 1000 × 24 × цена за розетку;
+ * профит рига (чистый) = доход − электричество. Профит фермы — сумма профитов всех ригов.
  */
+const TIME_HOURS = { work: 18, rest: 24 };
+
+// Средняя добыча монеты в сутки с учётом графика работы рига (см. комментарий выше).
+function averageCoinPerDay(rig) {
+  const base = Number(rig?.coin_per_day || 0);
+  const workDays = Number(rig?.work_days ?? 5);
+  const restDays = Number(rig?.rest_days ?? 2);
+  const totalDays = workDays + restDays;
+  if (totalDays <= 0) return base;
+  if (rig?.time_basis === 'rest') {
+    return (base * workDays + (base / TIME_HOURS.work) * TIME_HOURS.rest * restDays) / totalDays;
+  }
+  return ((base / TIME_HOURS.rest) * TIME_HOURS.work * workDays + base * restDays) / totalDays;
+}
 const configuredApi = window.localStorage.getItem('korch_api_url') || new URLSearchParams(window.location.search).get('api');
 const sameOriginBackend = !window.location.port || window.location.port === '8000';
 const API = (configuredApi || (sameOriginBackend ? '/api' : `${window.location.protocol}//${window.location.hostname}:8000/api`)).replace(/\/$/, '');
