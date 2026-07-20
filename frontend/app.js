@@ -39,9 +39,9 @@ function avgDailyYield(rig) {
   const weekendDays = Number(rig?.weekend_days ?? 2);
   const totalDays = workingDays + weekendDays;
   if (totalDays <= 0) return coinsPerDay;
-  const yieldWorking = ((coinsPerDay / 24 * TIME.workingDayDuration * workingDays) + (coinsPerDay * weekendDays)) / totalDays;
+  const yieldWorking = (coinsPerDay * workingDays + coinsPerDay / TIME.workingDayDuration * TIME.weekendDayDuration * weekendDays) / totalDays;
   if (rig?.calculation_mode === 'weekend_days') {
-    return ((coinsPerDay / TIME.workingDayDuration * TIME.weekendDayDuration * workingDays) + (coinsPerDay * weekendDays)) / totalDays;
+    return (coinsPerDay / TIME.weekendDayDuration * TIME.workingDayDuration * workingDays + coinsPerDay * weekendDays) / totalDays;
   }
   return yieldWorking;
 }
