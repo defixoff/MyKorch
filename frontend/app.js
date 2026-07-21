@@ -39,9 +39,9 @@ function avgDailyYield(rig) {
   const weekendDays = Number(rig?.weekend_days ?? 2);
   const totalDays = workingDays + weekendDays;
   if (totalDays <= 0) return coinsPerDay;
-  const yieldWorking = (coinsPerDay * workingDays + coinsPerDay / TIME.workingDayDuration * TIME.weekendDayDuration * weekendDays) / totalDays;
+  const yieldWorking = ((coinsPerDay / 24 * TIME.workingDayDuration * workingDays) + (coinsPerDay * weekendDays)) / totalDays;
   if (rig?.calculation_mode === 'weekend_days') {
-    return (coinsPerDay / TIME.weekendDayDuration * TIME.workingDayDuration * workingDays + coinsPerDay * weekendDays) / totalDays;
+    return ((coinsPerDay / TIME.workingDayDuration * TIME.weekendDayDuration * workingDays) + (coinsPerDay * weekendDays)) / totalDays;
   }
   return yieldWorking;
 }
@@ -338,7 +338,12 @@ document.addEventListener('click', (event) => {
 
 async function init() {
   applyTheme();
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+    // Когда новый воркер после деплоя забирает контроль над уже открытыми
+    // вкладками — перезагружаем страницу, иначе в памяти останется старый JS.
+    navigator.serviceWorker.addEventListener('controllerchange', () => window.location.reload());
+  }
   if (!state.token) return renderAuth();
   const cached = loadCache();
   if (cached?.user) { Object.assign(state, cached); renderDashboard(); } else { renderSkeleton(); }
