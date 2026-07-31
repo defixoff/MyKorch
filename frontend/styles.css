@@ -20,10 +20,10 @@ button:not(:disabled):active { transform: translateY(0) scale(.98); }
 }
 
 /* Вход/выход модалок */
-.modal-backdrop { animation: fade-in .18s ease-out; backdrop-filter: blur(8px); }
-.modal-panel { animation: modal-in .22s cubic-bezier(.2,.8,.2,1); }
+.modal-backdrop { animation: fade-in .2s ease-out; backdrop-filter: blur(8px); }
+.modal-panel { animation: modal-in .28s cubic-bezier(.34,1.4,.44,1); will-change: transform, opacity; }
 .modal-backdrop.closing { animation: fade-out .16s ease-in forwards; }
-.modal-panel.closing { animation: modal-out .16s cubic-bezier(.4,0,1,1) forwards; }
+.modal-panel.closing { animation: modal-out .18s cubic-bezier(.5,0,.75,0) forwards; }
 
 .scroll-row { scrollbar-width: thin; scrollbar-color: #475569 transparent; }
 .scroll-row::-webkit-scrollbar { height: 7px; width: 7px; }
@@ -34,9 +34,10 @@ button:not(:disabled):active { transform: translateY(0) scale(.98); }
 .toast.toast-out { animation: toast-out .2s ease-in forwards; }
 
 /* Плавное появление страницы, карточек и активного таба рига */
-.page-enter { animation: rise-in .25s ease-out; }
-.rise-in { animation: rise-in .3s cubic-bezier(.2,.8,.2,1) both; }
-.rig-tab.tab-pop { animation: tab-pop .22s cubic-bezier(.2,.8,.2,1); }
+.page-enter { animation: rise-in .3s cubic-bezier(.2,.8,.2,1); }
+.rise-in { animation: rise-in .4s cubic-bezier(.2,.8,.2,1) both; will-change: transform, opacity; }
+.rig-tab { transition: transform .18s ease, background-color .18s ease, color .18s ease, border-color .18s ease; }
+.rig-tab.tab-pop { animation: tab-pop .3s cubic-bezier(.34,1.4,.44,1); }
 
 /* Скелетон при первой загрузке, пока нет ни кэша, ни ответа сервера */
 .skeleton { position: relative; overflow: hidden; background: rgb(148 163 184 / .18); }
@@ -44,10 +45,10 @@ button:not(:disabled):active { transform: translateY(0) scale(.98); }
 
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes fade-out { from { opacity: 1; } to { opacity: 0; } }
-@keyframes modal-in { from { opacity: 0; transform: translateY(16px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
-@keyframes modal-out { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(12px) scale(.98); } }
+@keyframes modal-in { from { opacity: 0; transform: translateY(20px) scale(.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes modal-out { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(10px) scale(.97); } }
 @keyframes toast-in { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
 @keyframes toast-out { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(20px); } }
-@keyframes rise-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes tab-pop { from { transform: scale(.94); } to { transform: scale(1); } }
+@keyframes rise-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes tab-pop { from { transform: scale(.92); } 60% { transform: scale(1.03); } to { transform: scale(1); } }
 @keyframes skeleton-sweep { to { transform: translateX(100%); } }

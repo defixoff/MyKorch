@@ -6,26 +6,38 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generator
 
 import psycopg
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from psycopg.rows import dict_row
 
+logger = logging.getLogger("korch")
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
 DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")
-JWT_SECRET = os.getenv("KORCH_JWT_SECRET", "change-this-secret-before-public-deployment")
+_DEFAULT_JWT_SECRET = "change-this-secret-before-public-deployment"
+JWT_SECRET = os.getenv("KORCH_JWT_SECRET", _DEFAULT_JWT_SECRET)
 JWT_TTL_SECONDS = 60 * 60 * 24 * 14
+
+if JWT_SECRET == _DEFAULT_JWT_SECRET:
+    logger.warning(
+        "KORCH_JWT_SECRET не задан — используется встроенный секрет. "
+        "Любой, кто видел исходники, может подписать токен за любого пользователя. "
+        "Задайте случайный KORCH_JWT_SECRET в переменных окружения."
+    )
 
 if not DATABASE_URL:
     # Fail at request/startup time with an actionable message instead of silently
@@ -124,6 +136,8 @@ def password_hash(password: str, salt: bytes | None = None) -> str:
 
 
 def verify_password(password: str, encoded: str) -> bool:
+    # Любая ошибка разбора (включая binascii.Error от b64decode на мусорных
+    # данных) трактуется как «пароль не совпал», а не падает с 500.
     try:
         algorithm, raw_iterations, raw_salt, raw_digest = encoded.split("$")
         if algorithm != "pbkdf2_sha256":
@@ -132,7 +146,7 @@ def verify_password(password: str, encoded: str) -> bool:
         expected = base64.urlsafe_b64decode(raw_digest)
         actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, int(raw_iterations))
         return hmac.compare_digest(actual, expected)
-    except (TypeError, ValueError):
+    except Exception:
         return False
 
 
@@ -154,6 +168,11 @@ def create_token(user_id: int, username: str) -> str:
 def decode_token(token: str) -> dict[str, Any]:
     try:
         header, payload, signature = token.split(".")
+        # Явно проверяем alg: токены с другим алгоритмом отвергаем сразу,
+        # чтобы проверка подписи не зависела от содержимого заголовка.
+        header_claims = json.loads(b64url_decode(header))
+        if header_claims.get("alg") != "HS256":
+            raise ValueError("alg")
         expected = b64url_encode(hmac.new(JWT_SECRET.encode(), f"{header}.{payload}".encode(), hashlib.sha256).digest())
         if not hmac.compare_digest(signature, expected):
             raise ValueError("signature")
@@ -203,6 +222,37 @@ app = FastAPI(title="Мой корч API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 
 
+# --- Простой rate-limiting для auth-эндпоинтов ---------------------------------
+# In-memory скользящее окно по (IP, логин): смягчает онлайн-брутфорс пароля.
+# На Vercel каждый инстанс считает своё — это допустимо: лимит тут защита от
+# наивного перебора, а не строгая квота.
+_AUTH_WINDOW_SECONDS = 300
+_AUTH_MAX_ATTEMPTS = 10
+_auth_attempts: dict[tuple[str, str], list[float]] = {}
+_auth_lock = threading.Lock()
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def enforce_auth_rate_limit(request: Request, username: str) -> None:
+    key = (_client_ip(request), username.lower())
+    now = time.time()
+    with _auth_lock:
+        attempts = [t for t in _auth_attempts.get(key, []) if now - t < _AUTH_WINDOW_SECONDS]
+        if len(attempts) >= _AUTH_MAX_ATTEMPTS:
+            raise HTTPException(status_code=429, detail="Слишком много попыток. Попробуйте через несколько минут.")
+        attempts.append(now)
+        _auth_attempts[key] = attempts
+        # Не даём словарю расти бесконечно.
+        if len(_auth_attempts) > 10_000:
+            _auth_attempts.clear()
+
+
 @app.on_event("startup")
 def startup() -> None:
     if DATABASE_URL:
@@ -225,8 +275,9 @@ def user_payload(user: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.post("/api/auth/register", status_code=status.HTTP_201_CREATED)
-def register(credentials: Credentials) -> dict[str, Any]:
+def register(credentials: Credentials, request: Request) -> dict[str, Any]:
     username = credentials.username.strip()
+    enforce_auth_rate_limit(request, username)
     try:
         with database() as connection:
             user = connection.execute("INSERT INTO users(username, hashed_password) VALUES (%s, %s) RETURNING id, username", (username, password_hash(credentials.password))).fetchone()
@@ -239,7 +290,8 @@ def register(credentials: Credentials) -> dict[str, Any]:
 
 
 @app.post("/api/auth/login")
-def login(credentials: Credentials) -> dict[str, Any]:
+def login(credentials: Credentials, request: Request) -> dict[str, Any]:
+    enforce_auth_rate_limit(request, credentials.username.strip())
     with database() as connection:
         user = connection.execute("SELECT * FROM users WHERE username = %s", (credentials.username.strip(),)).fetchone()
     if user is None or not verify_password(credentials.password, user["hashed_password"]):
@@ -265,6 +317,18 @@ def list_rigs(user: dict[str, Any] = Depends(authorized_user)) -> list[dict[str,
 def create_rig(payload: RigInput, user: dict[str, Any] = Depends(authorized_user)) -> dict[str, Any]:
     with database() as connection:
         return connection.execute(f"INSERT INTO rigs(user_id, name) VALUES (%s, %s) RETURNING {RIG_FIELDS}", (user["id"], payload.name.strip())).fetchone()
+
+
+@app.patch("/api/rigs/{rig_id}")
+def rename_rig(rig_id: int, payload: RigInput, user: dict[str, Any] = Depends(authorized_user)) -> dict[str, Any]:
+    with database() as connection:
+        row = connection.execute(
+            f"UPDATE rigs SET name = %s WHERE id = %s AND user_id = %s RETURNING {RIG_FIELDS}",
+            (payload.name.strip(), rig_id, user["id"]),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Риг не найден")
+        return row
 
 
 def validate_coin_ownership(connection: psycopg.Connection[Any], coin: str, user_id: int) -> None:
