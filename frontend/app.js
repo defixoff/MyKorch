@@ -123,6 +123,14 @@ function closeModal(node) {
   setTimeout(finish, 220);
 }
 
+// Кэш пишем только после серверного подтверждения состояния: иначе в него
+// улетали optimistic-объекты с временными id, и после F5 карточки "висели"
+// с id вида optimistic-card-... до следующего refresh().
+function renderAndCache() {
+  renderDashboard();
+  saveCache();
+}
+
 function renderSkeleton() {
   app.innerHTML = `<div class="mx-auto min-h-screen max-w-6xl p-4 sm:p-7"><header class="mb-7 flex flex-wrap items-center justify-between gap-3"><div class="space-y-2"><div class="skeleton h-3 w-24 rounded-md"></div><div class="skeleton h-7 w-40 rounded-lg"></div></div><div class="flex gap-2 sm:gap-3"><div class="skeleton h-10 w-28 rounded-xl"></div><div class="skeleton h-10 w-20 rounded-xl"></div></div></header><section class="grid gap-3 sm:gap-4 sm:grid-cols-2"><div class="skeleton h-28 rounded-2xl"></div><div class="skeleton h-28 rounded-2xl"></div></section><section class="mt-7 sm:mt-8"><div class="skeleton mb-3 h-5 w-16 rounded-md"></div><div class="flex gap-2.5"><div class="skeleton h-10 w-24 rounded-xl"></div><div class="skeleton h-10 w-24 rounded-xl"></div></div></section><section class="mt-6 space-y-3 rounded-2xl border border-slate-200 p-4 dark:border-slate-800 sm:p-6"><div class="skeleton h-6 w-32 rounded-md"></div><div class="skeleton h-16 rounded-xl"></div><div class="skeleton h-16 rounded-xl"></div></section></div>`;
 }
@@ -132,12 +140,20 @@ function renderAuth(mode = 'login') {
   document.querySelector('#auth-switch').onclick = () => renderAuth(mode === 'login' ? 'register' : 'login');
   document.querySelector('#auth-form').onsubmit = async (event) => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const submit = form.querySelector('button[type="submit"], button:not([type])');
+    const originalText = submit?.textContent;
+    if (submit) { submit.disabled = true; submit.textContent = 'Подключаемся…'; }
     try {
-      const data = await request(`/auth/${mode === 'login' ? 'login' : 'register'}`, { method: 'POST', body: JSON.stringify(Object.fromEntries(form)) });
+      const data = await request(`/auth/${mode === 'login' ? 'login' : 'register'}`, { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) });
       state.token = data.token; state.user = data.user; localStorage.setItem('korch_token', data.token);
       await refresh(); toast(mode === 'login' ? 'С возвращением!' : 'Аккаунт создан');
-    } catch (error) { toast(error.message, 'error'); }
+    } catch (error) {
+      // Раньше здесь не было finally/reenable — после первой ошибки кнопка навсегда
+      // оставалась "Подключаемся…" и приходилось перезагружать страницу.
+      if (submit) { submit.disabled = false; submit.textContent = originalText; }
+      toast(error.message, 'error');
+    }
   };
 }
 
@@ -158,7 +174,6 @@ function renderDashboard() {
   document.querySelector('#rig-config')?.addEventListener('click', () => showRigConfigModal(selectedRig));
   document.querySelectorAll('[data-edit-card]').forEach((button) => button.onclick = () => { state.editingCardId = Number(button.dataset.editCard); showCardModal(state.cards.find((card) => card.id === Number(button.dataset.editCard))); });
   document.querySelectorAll('[data-delete-card]').forEach((button) => button.onclick = () => deleteCard(Number(button.dataset.deleteCard)));
-  saveCache();
 }
 
 function cardHtml(card, index = 0) {
@@ -226,10 +241,11 @@ function switchRig(rigId) {
   state.selectedRigId = rigId;
   state.cards = state.cardsByRig[rigId] || [];
   renderDashboard();
+  saveCache(); // выбор рига — не optimistic-данные, кэшировать безопасно сразу
   request(`/rigs/${rigId}/cards`).then((cards) => {
     const changed = JSON.stringify(cards) !== JSON.stringify(state.cardsByRig[rigId] || []);
     state.cardsByRig[rigId] = cards;
-    if (state.selectedRigId === rigId && changed) { state.cards = cards; renderDashboard(); }
+    if (state.selectedRigId === rigId && changed) { state.cards = cards; renderAndCache(); }
   }).catch(() => { /* тихая сверка — не мешаем тостом при обычном переключении */ });
 }
 
@@ -238,7 +254,7 @@ async function deleteCard(cardId) {
   const previousCards = [...state.cards]; const previousByRig = { ...state.cardsByRig };
   state.cards = state.cards.filter((card) => card.id !== cardId); state.cardsByRig[state.selectedRigId] = state.cards;
   renderDashboard(); toast('Карта удалена');
-  try { await request(`/cards/${cardId}`, { method: 'DELETE' }); } catch (error) { state.cards = previousCards; state.cardsByRig = previousByRig; renderDashboard(); toast(`Не удалось удалить карту: ${error.message}`, 'error'); }
+  try { await request(`/cards/${cardId}`, { method: 'DELETE' }); saveCache(); } catch (error) { state.cards = previousCards; state.cardsByRig = previousByRig; renderDashboard(); toast(`Не удалось удалить карту: ${error.message}`, 'error'); }
 }
 async function deleteSelectedRig() {
   if (!confirm('Удалить риг и всё оборудование в нём?')) return;
@@ -246,20 +262,18 @@ async function deleteSelectedRig() {
   state.rigs = state.rigs.filter((rig) => rig.id !== rigId); delete state.cardsByRig[rigId];
   state.selectedRigId = state.rigs[0]?.id || null; state.cards = state.cardsByRig[state.selectedRigId] || [];
   renderDashboard(); toast('Риг удалён');
-  try { await request(`/rigs/${rigId}`, { method: 'DELETE' }); } catch (error) { state.rigs = previousRigs; state.cardsByRig = previousByRig; state.cards = previousCards; state.selectedRigId = previousSelected; renderDashboard(); toast(`Не удалось удалить риг: ${error.message}`, 'error'); }
+  try { await request(`/rigs/${rigId}`, { method: 'DELETE' }); saveCache(); } catch (error) { state.rigs = previousRigs; state.cardsByRig = previousByRig; state.cards = previousCards; state.selectedRigId = previousSelected; renderDashboard(); toast(`Не удалось удалить риг: ${error.message}`, 'error'); }
 }
 async function refresh() {
-  // /me, /coins и /rigs независимы — запускаем параллельно вместо последовательных await.
-  const [user, coins, rigs] = await Promise.all([request('/me'), request('/coins'), request('/rigs')]);
-  state.user = user; state.coins = coins; state.rigs = rigs;
+  // Один round trip вместо 3 + N: профиль, монеты, риги и карты всех ригов
+  // приезжают из /bootstrap вместе. Это главный фикс скорости загрузки.
+  const data = await request('/bootstrap');
+  state.user = data.user; state.coins = data.coins; state.rigs = data.rigs;
+  state.cardsByRig = data.cardsByRig || {};
   if (!state.rigs.some((rig) => rig.id === state.selectedRigId)) state.selectedRigId = state.rigs[0]?.id || null;
-  // Карты каждого рига запрашиваются параллельно и группируются по id рига —
-  // это нужно и для показа текущего рига, и для мгновенного переключения между ригами.
-  const cardLists = await Promise.all(state.rigs.map((rig) => request(`/rigs/${rig.id}/cards`)));
-  state.cardsByRig = {};
-  state.rigs.forEach((rig, index) => { state.cardsByRig[rig.id] = cardLists[index]; });
   state.cards = state.cardsByRig[state.selectedRigId] || [];
   renderDashboard();
+  saveCache();
 }
 function logout(showMessage) { state.token = null; state.user = null; state.cards = []; state.cardsByRig = {}; localStorage.removeItem('korch_token'); localStorage.removeItem(CACHE_KEY); renderAuth(); if (showMessage) toast('Вы вышли из аккаунта'); }
 
@@ -268,10 +282,8 @@ document.addEventListener('submit', (event) => {
   const form = event.target;
   const modalRoot = form.closest('.modal-backdrop');
   if (!modalRoot) {
-    if (form.id === 'auth-form') {
-      const submit = form.querySelector('button[type="submit"], button:not([type])');
-      if (submit) { submit.disabled = true; submit.dataset.originalText = submit.textContent; submit.textContent = 'Подключаемся…'; }
-    }
+    // Форма входа/регистрации живёт вне модалок — её auth-submitting слушатель
+    // в renderAuth сам ставит/снимает disabled на кнопке.
     return;
   }
   const raw = Object.fromEntries(new FormData(form));
@@ -291,7 +303,7 @@ document.addEventListener('submit', (event) => {
     request(path, { method: existing ? 'PUT' : 'POST', body: JSON.stringify(values) }).then((saved) => {
       state.cards = state.cards.map((card) => card.id === optimistic.id ? saved : card);
       state.cardsByRig[state.selectedRigId] = state.cards;
-      renderDashboard();
+      renderAndCache();
     }).catch((error) => { state.cards = previousCards; state.cardsByRig = previousByRig; renderDashboard(); toast(`Изменения карты отменены: ${error.message}`, 'error'); });
     return;
   }
@@ -299,7 +311,7 @@ document.addEventListener('submit', (event) => {
     event.preventDefault(); event.stopImmediatePropagation();
     const optimisticId = `optimistic-coin-${Date.now()}`; const optimisticCoin = { id: optimisticId, name: String(raw.name).trim().toUpperCase(), price_usd: Number(raw.price_usd) }; const previousCoins = [...state.coins];
     state.coins = [...state.coins, optimisticCoin]; closeModal(modalRoot); renderDashboard(); toast('Монета добавлена');
-    request('/coins', { method: 'POST', body: JSON.stringify({ name: optimisticCoin.name, price_usd: optimisticCoin.price_usd }) }).then((saved) => { state.coins = state.coins.map((coin) => coin.id === optimisticId ? saved : coin); }).catch((error) => { state.coins = previousCoins; renderDashboard(); toast(`Монета не сохранена: ${error.message}`, 'error'); });
+    request('/coins', { method: 'POST', body: JSON.stringify({ name: optimisticCoin.name, price_usd: optimisticCoin.price_usd }) }).then((saved) => { state.coins = state.coins.map((coin) => coin.id === optimisticId ? saved : coin); saveCache(); }).catch((error) => { state.coins = previousCoins; renderDashboard(); toast(`Монета не сохранена: ${error.message}`, 'error'); });
     return;
   }
   if (form.dataset.settingsCoin) {
@@ -307,7 +319,7 @@ document.addEventListener('submit', (event) => {
     const coinId = form.dataset.settingsCoin; const previousCoins = [...state.coins]; const previousRigs = [...state.rigs]; const oldCoin = state.coins.find((coin) => String(coin.id) === String(coinId)); const nextCoin = { ...oldCoin, name: String(raw.name).trim().toUpperCase(), price_usd: Number(raw.price_usd) };
     state.coins = state.coins.map((coin) => String(coin.id) === String(coinId) ? nextCoin : coin); state.rigs = state.rigs.map((rig) => rig.coin && rig.coin.toLowerCase() === oldCoin.name.toLowerCase() ? { ...rig, coin: nextCoin.name } : rig);
     closeModal(modalRoot); renderDashboard(); toast('Курс обновлён');
-    request(`/coins/${coinId}`, { method: 'PUT', body: JSON.stringify({ name: nextCoin.name, price_usd: nextCoin.price_usd }) }).catch((error) => { state.coins = previousCoins; state.rigs = previousRigs; renderDashboard(); toast(`Курс не сохранён: ${error.message}`, 'error'); });
+    request(`/coins/${coinId}`, { method: 'PUT', body: JSON.stringify({ name: nextCoin.name, price_usd: nextCoin.price_usd }) }).then(saveCache).catch((error) => { state.coins = previousCoins; state.rigs = previousRigs; renderDashboard(); toast(`Курс не сохранён: ${error.message}`, 'error'); });
     return;
   }
   if (form.dataset.rigConfig) {
@@ -317,7 +329,7 @@ document.addEventListener('submit', (event) => {
     state.rigs = state.rigs.map((rig) => String(rig.id) === String(rigId) ? nextRig : rig);
     closeModal(modalRoot); renderDashboard(); toast('Конфигурация сохранена');
     request(`/rigs/${rigId}/config`, { method: 'PATCH', body: JSON.stringify({ coin: nextRig.coin, coin_per_day: nextRig.coin_per_day, electricity_cost: nextRig.electricity_cost, working_days: nextRig.working_days, weekend_days: nextRig.weekend_days, calculation_mode: nextRig.calculation_mode }) }).then((saved) => {
-      state.rigs = state.rigs.map((rig) => String(rig.id) === String(rigId) ? saved : rig); renderDashboard();
+      state.rigs = state.rigs.map((rig) => String(rig.id) === String(rigId) ? saved : rig); renderAndCache();
     }).catch((error) => { state.rigs = previousRigs; renderDashboard(); toast(`Конфигурация не сохранена: ${error.message}`, 'error'); });
     return;
   }
@@ -328,7 +340,7 @@ document.addEventListener('submit', (event) => {
     state.rigs = state.rigs.map((rig) => rig.id === rigId ? { ...rig, name } : rig);
     closeModal(modalRoot); renderDashboard(); toast('Риг переименован');
     request(`/rigs/${rigId}`, { method: 'PATCH', body: JSON.stringify({ name }) }).then((saved) => {
-      state.rigs = state.rigs.map((rig) => rig.id === rigId ? saved : rig); renderDashboard();
+      state.rigs = state.rigs.map((rig) => rig.id === rigId ? saved : rig); renderAndCache();
     }).catch((error) => { state.rigs = previousRigs; renderDashboard(); toast(`Не удалось переименовать: ${error.message}`, 'error'); });
     return;
   }
@@ -341,7 +353,7 @@ document.addEventListener('submit', (event) => {
     request('/rigs', { method: 'POST', body: JSON.stringify({ name }) }).then((saved) => {
       state.rigs = state.rigs.map((rig) => rig.id === tempId ? saved : rig);
       state.cardsByRig[saved.id] = state.cardsByRig[tempId] || []; delete state.cardsByRig[tempId];
-      state.selectedRigId = saved.id; state.cards = state.cardsByRig[saved.id]; renderDashboard();
+      state.selectedRigId = saved.id; state.cards = state.cardsByRig[saved.id]; renderAndCache();
     }).catch((error) => { state.rigs = previousRigs; state.selectedRigId = previousSelected; delete state.cardsByRig[tempId]; renderDashboard(); toast(`Риг не сохранён: ${error.message}`, 'error'); });
     return;
   }
@@ -355,7 +367,7 @@ document.addEventListener('click', (event) => {
   const coinId = button.dataset.settingsDelete; const previousCoins = [...state.coins];
   state.coins = state.coins.filter((coin) => String(coin.id) !== String(coinId));
   const modalRoot = button.closest('.modal-backdrop'); closeModal(modalRoot); renderDashboard(); toast('Монета удалена');
-  request(`/coins/${coinId}`, { method: 'DELETE' }).catch((error) => { state.coins = previousCoins; renderDashboard(); toast(`Монета не удалена: ${error.message}`, 'error'); });
+  request(`/coins/${coinId}`, { method: 'DELETE' }).then(saveCache).catch((error) => { state.coins = previousCoins; renderDashboard(); toast(`Монета не удалена: ${error.message}`, 'error'); });
 }, true);
 
 async function init() {

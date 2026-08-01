@@ -45,19 +45,33 @@ if not DATABASE_URL:
     DATABASE_URL = ""
 
 
+# Пул вместо нового TCP-коннекта на каждый запрос: без него каждый из вызовов
+# database() ниже платил handshake + auth к PostgreSQL, что и давало заметную
+# задержку "ответ дб" на каждый клик. Idle-коннекты чистит max_lifetime.
+# На Vercel инстансов мало и они живут недолго, поэтому max_size скромный.
+from psycopg_pool import ConnectionPool
+
+_pool: ConnectionPool | None = None
+
+
+def connection_pool() -> ConnectionPool:
+    global _pool
+    if _pool is None:
+        if not DATABASE_URL:
+            raise RuntimeError("DATABASE_URL не задан. Добавьте строку подключения PostgreSQL в переменные окружения Vercel.")
+        _pool = ConnectionPool(DATABASE_URL, min_size=0, max_size=5, max_lifetime=300, kwargs={"row_factory": dict_row})
+    return _pool
+
+
 @contextmanager
 def database() -> Generator[psycopg.Connection[Any], None, None]:
-    if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL не задан. Добавьте строку подключения PostgreSQL в переменные окружения Vercel.")
-    connection = psycopg.connect(DATABASE_URL, row_factory=dict_row)
-    try:
-        yield connection
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+    with connection_pool().connection() as connection:
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
 
 
 def initialize_database() -> None:
@@ -305,6 +319,26 @@ def get_me(user: dict[str, Any] = Depends(authorized_user)) -> dict[str, Any]:
 
 
 RIG_FIELDS = "id, name, coin, coin_per_day, electricity_cost, working_days, weekend_days, calculation_mode"
+CARD_FIELDS = "id, rig_id, model, quantity, hashrate, power"
+
+
+@app.get("/api/bootstrap")
+def bootstrap(user: dict[str, Any] = Depends(authorized_user)) -> dict[str, Any]:
+    # Всё что нужно дашборду за один round trip: профиль, монеты, риги и карты
+    # ВСЕХ ригов одним запросом (раньше фронт делал 3 + N запросов и ждал
+    # холодный коннект к БД на каждый). Карты группируются по rig_id на месте.
+    with database() as connection:
+        coins = list(connection.execute("SELECT id, name, price_usd FROM coins WHERE user_id = %s ORDER BY name", (user["id"],)).fetchall())
+        rigs = list(connection.execute(f"SELECT {RIG_FIELDS} FROM rigs WHERE user_id = %s ORDER BY id", (user["id"],)).fetchall())
+        cards_by_rig: dict[int, list[dict[str, Any]]] = {}
+        if rigs:
+            rows = connection.execute(
+                f"SELECT {CARD_FIELDS} FROM cards WHERE user_id = %s ORDER BY id",
+                (user["id"],),
+            ).fetchall()
+            for card in rows:
+                cards_by_rig.setdefault(card["rig_id"], []).append(card)
+    return {"user": user_payload(user), "coins": coins, "rigs": rigs, "cardsByRig": {str(rig_id): cards for rig_id, cards in cards_by_rig.items()}}
 
 
 @app.get("/api/rigs")
@@ -403,9 +437,6 @@ def delete_coin(coin_id: int, user: dict[str, Any] = Depends(authorized_user)) -
 def validate_rig_ownership(connection: psycopg.Connection[Any], rig_id: int, user_id: int) -> None:
     if connection.execute("SELECT 1 FROM rigs WHERE id = %s AND user_id = %s", (rig_id, user_id)).fetchone() is None:
         raise HTTPException(status_code=404, detail="Риг не найден")
-
-
-CARD_FIELDS = "id, rig_id, model, quantity, hashrate, power"
 
 
 @app.get("/api/rigs/{rig_id}/cards")
