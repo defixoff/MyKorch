@@ -17,26 +17,41 @@
 - 🌗 Тёмная/светлая тема без пересборки экрана
 - 📴 Оффлайн-кэш последнего известного состояния (localStorage + Cache Storage)
 
-## Запуск локально
+## Запуск
 
-```bash
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1        # или source .venv/bin/activate на Linux/macOS
-pip install -r requirements.txt
-uvicorn backend.main:app --reload
+### Песочница: локально / в локальной сети, **без Postgres** (SQLite)
+
+Для тестов и доступа с телефона в домашней сети backend поддерживает SQLite-режим. Запустите один из скриптов:
+
+```bat
+:: Windows — двойной клик по start-lan.bat или из консоли:
+start-lan.bat
+
+:: Linux / macOS / Git Bash:
+bash start-lan.sh
 ```
 
-Откройте [http://127.0.0.1:8000](http://127.0.0.1:8000). При первом входе создайте аккаунт — вместе с ним появятся дефолтный риг «Мой риг» и монета QTC.
+Скрипт:
+- создаёт `.venv` и один раз ставит зависимости (нужен интернет);
+- автоматически определяет IP этой машины в локальной сети;
+- (Windows) первым запуском добавляет правило firewall для порта 8000;
+- запускает `uvicorn --host 0.0.0.0:8000` с `DATABASE_URL=sqlite:///korch-local.db`.
 
-> **База:** локально без `DATABASE_URL` API упадёт с понятной ошибкой. Для локального запуска поднимите PostgreSQL (удобнее всего — `docker compose up -d`) и задайте `DATABASE_URL`, либо запустите backend через тот же Compose.
+В консоли будут два адреса:
+- `http://127.0.0.1:8000` — открыть на этом ПК;
+- `http://192.168.x.x:8000` — открыть с телефона/планшета в той же Wi-Fi.
 
-## Вход с телефона (домашняя сеть)
+Остановить — `Ctrl+C`. Чтобы вместо SQLite использовать свой Postgres локально — в `start-lan.bat`/`start-lan.sh` замените `DATABASE_URL` на свой URL.
+
+> **Прод / Vercel:** SQLite-ветка активируется **только** если `DATABASE_URL` явно начинается с `sqlite:///`. Оставьте `DATABASE_URL` пустым/`postgresql://...` и прод работает через PostgreSQL как раньше.
+
+### Классический запуск (через ваш Postgres)
 
 ```bash
-uvicorn backend.main:app --host 0.0.0.0 --port 8000
+docker compose up -d    # Postgres + backend, порт 8000
+# или
+uvicorn backend.main:app --reload   # DATABASE_URL=postgresql://... (через .env или переменную окружения)
 ```
-
-На телефоне откройте `http://<IP-компа>:8000`. Телефон и ПК должны быть в одной Wi-Fi сети, Windows Firewall должен пускать Python на TCP 8000. Если фронтенд запущен отдельно (Live Server), приложение автоматически направит API на `:8000/api`; адрес можно перебить через `?api=http://host:port/api`.
 
 ## Деплой на Vercel + облачный Postgres
 

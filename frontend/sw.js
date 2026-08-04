@@ -1,7 +1,7 @@
-const CACHE_NAME = 'moy-korch-v10';
+const CACHE_NAME = 'moy-korch-v11';
 // Список нужен только как оффлайн-фолбэк — актуальность контента больше
 // не зависит от ручного бампа версии в этих строках (см. network-first ниже).
-const STATIC_FILES = ['/index.html', '/app.js', '/styles.css', '/manifest.json', '/icon.svg'];
+const STATIC_FILES = ['/index.html', '/app.js', '/styles.css', '/manifest.json', '/icon.svg', '/fonts/unbounded.ttf'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_FILES)).then(() => self.skipWaiting()));

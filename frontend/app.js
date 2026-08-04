@@ -53,8 +53,13 @@ const state = { token: localStorage.getItem('korch_token'), user: null, rigs: []
 const app = document.querySelector('#app');
 
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[char]));
-const money = (value) => new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'USD', minimumFractionDigits: 3, maximumFractionDigits: 3 }).format(value || 0);
+const money = (value) => new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value || 0);
+// Для tween-анимации денежные суммы форматируем ЧИСЛОМ (знак добавляем сами).
+const moneyFmt = (value) => new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Math.abs(Number(value) || 0));
 const number = (value, digits = 2) => new Intl.NumberFormat('ru-RU', { maximumFractionDigits: digits }).format(value || 0);
+
+/* Иконки: ico('gear') → <svg><use #i-gear></svg>. Спрайт объявлен в index.html. */
+const ico = (name, extra = '') => `<svg class="ico ${extra}" aria-hidden="true"><use href="#i-${name}"></use></svg>`;
 
 // Кэш последнего известного состояния — чтобы при следующем открытии сайта интерфейс
 // отрисовался мгновенно, а не показывал пустой фон, пока идёт запрос к серверу.
@@ -100,14 +105,16 @@ async function request(path, options = {}) {
 
 function toast(message, type = 'success') {
   const node = document.createElement('div');
-  node.className = `toast rounded-xl px-4 py-3 text-sm font-medium shadow-xl ${type === 'error' ? 'bg-rose-600 text-white' : 'bg-emerald-500 text-slate-950'}`;
-  node.textContent = message;
+  node.className = `toast ${type === 'error' ? 'error' : 'ok'}`;
+  node.innerHTML = `${ico(type === 'error' ? 'close' : 'check')}<span>${escapeHtml(message)}</span>`;
   document.querySelector('#toast-region').append(node);
   setTimeout(() => { node.classList.add('toast-out'); node.addEventListener('animationend', () => node.remove(), { once: true }); setTimeout(() => node.remove(), 300); }, 3200);
 }
 
 function applyTheme() {
-  document.documentElement.classList.toggle('dark', state.theme === 'dark');
+  const dark = state.theme === 'dark';
+  document.documentElement.classList.toggle('dark', dark);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#05070d' : '#eef1f8');
   localStorage.setItem('korch_theme', state.theme);
 }
 
@@ -116,11 +123,10 @@ function applyTheme() {
 function closeModal(node) {
   if (!node || node.classList.contains('closing')) return;
   node.classList.add('closing');
-  node.querySelector('.modal-panel')?.classList.add('closing');
   let done = false;
   const finish = () => { if (done) return; done = true; node.remove(); };
   node.addEventListener('animationend', finish, { once: true });
-  setTimeout(finish, 220);
+  setTimeout(finish, 260);
 }
 
 // Кэш пишем только после серверного подтверждения состояния: иначе в него
@@ -131,39 +137,217 @@ function renderAndCache() {
   saveCache();
 }
 
+/* --- Tween чисел: значения "подъезжают" к новым, дельта подсвечивается ----- */
+// ВАЖНО: renderDashboard() полностью пересобирает DOM, поэтому tween можно делать
+// только на тот узел, который продолжает существовать. Мы делаем tween ПЕРЕД рендером
+// маленьких "живых" узлов (см. syncTweenDashboard), либо ставим значение сразу.
+const displayedNumbers = new Map(); // id -> последнее число, показанное на экране
+
+// Форматируем ЦЕЛЕВОЕ значение (деньги/число), одинаково для tween и финала,
+// чтобы не было скачка между промежуточным кадром и итогом.
+function fmtTween(node, value) {
+  return node.dataset.tweenFmt === 'money' ? money(value) : number(value, 2);
+}
+
+function triggerFlash(scope, direction) {
+  scope.querySelectorAll('[data-tween]').forEach((el) => {
+    el.classList.remove('flash-up', 'flash-down');
+    void el.offsetWidth; // reflow, чтобы анимация перезапустилась
+    el.classList.add(direction === 'up' ? 'flash-up' : 'flash-down');
+  });
+}
+
+// rAF-интерполяция старого → нового значения в data-tween-узле.
+function tweenNode(node, from, to) {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || Math.abs(to - from) < 1e-9) {
+    node.textContent = fmtTween(node, to);
+    return;
+  }
+  const start = performance.now(); const duration = 420; const delta = to - from;
+  const step = (now) => {
+    const t = Math.min((now - start) / duration, 1);
+    const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic
+    node.textContent = fmtTween(node, from + delta * eased);
+    if (t < 1 && document.contains(node)) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+// Сверить "что на экране" с "что посчитали" и запустить tween/flash для изменившихся.
+// Вызывается после каждого renderDashboard(): если значение изменилось — анимируем
+// УЖЕ новый DOM-узел от предыдущего запомненного значения к текущему.
+function syncTweenDashboard(farmTotals, rigTotals) {
+  const map = { 'farm-profit': farmTotals.profit, 'farm-electricity': farmTotals.electricityExpense, 'rig-profit': rigTotals.profit, 'rig-electricity': rigTotals.electricityExpense };
+  for (const [id, next] of Object.entries(map)) {
+    const node = document.querySelector(`[data-tween="${id}"]`);
+    if (!node) continue;
+    const prev = displayedNumbers.get(id);
+    if (prev !== undefined && Number.isFinite(prev) && Math.abs(prev - next) > 1e-9) {
+      tweenNode(node, prev, next);
+      triggerFlash(node.closest('.stat-card, [data-stat-scope]') || node, next > prev ? 'up' : 'down');
+    } else {
+      node.textContent = fmtTween(node, next);
+    }
+    displayedNumbers.set(id, next);
+  }
+}
+
 function renderSkeleton() {
-  app.innerHTML = `<div class="mx-auto min-h-screen max-w-6xl p-4 sm:p-7"><header class="mb-7 flex flex-wrap items-center justify-between gap-3"><div class="space-y-2"><div class="skeleton h-3 w-24 rounded-md"></div><div class="skeleton h-7 w-40 rounded-lg"></div></div><div class="flex gap-2 sm:gap-3"><div class="skeleton h-10 w-28 rounded-xl"></div><div class="skeleton h-10 w-20 rounded-xl"></div></div></header><section class="grid gap-3 sm:gap-4 sm:grid-cols-2"><div class="skeleton h-28 rounded-2xl"></div><div class="skeleton h-28 rounded-2xl"></div></section><section class="mt-7 sm:mt-8"><div class="skeleton mb-3 h-5 w-16 rounded-md"></div><div class="flex gap-2.5"><div class="skeleton h-10 w-24 rounded-xl"></div><div class="skeleton h-10 w-24 rounded-xl"></div></div></section><section class="mt-6 space-y-3 rounded-2xl border border-slate-200 p-4 dark:border-slate-800 sm:p-6"><div class="skeleton h-6 w-32 rounded-md"></div><div class="skeleton h-16 rounded-xl"></div><div class="skeleton h-16 rounded-xl"></div></section></div>`;
+  app.innerHTML = `<div class="mx-auto min-h-screen max-w-6xl p-4 sm:p-7">
+    <header class="mb-7 flex flex-wrap items-center justify-between gap-3">
+      <div class="space-y-2"><div class="skeleton h-3 w-24"></div><div class="skeleton h-8 w-44"></div></div>
+      <div class="flex gap-2 sm:gap-3"><div class="skeleton h-11 w-28"></div><div class="skeleton h-11 w-24"></div></div>
+    </header>
+    <section class="grid gap-3 sm:gap-4 sm:grid-cols-2">
+      <div class="skeleton h-32" style="border-radius:22px"></div>
+      <div class="skeleton h-32" style="border-radius:22px"></div>
+    </section>
+    <section class="mt-7 sm:mt-8">
+      <div class="skeleton mb-3 h-5 w-16"></div>
+      <div class="rig-tabs"><div class="skeleton h-11 w-24"></div><div class="skeleton h-11 w-24"></div></div>
+    </section>
+    <section class="card-glass mt-6 space-y-3 p-4 sm:p-6">
+      <div class="skeleton h-6 w-32"></div>
+      <div class="skeleton h-20"></div>
+      <div class="skeleton h-20"></div>
+    </section>
+  </div>`;
 }
 
 function renderAuth(mode = 'login') {
-  app.innerHTML = `<section class="page-enter flex min-h-screen items-center justify-center p-5"><div class="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-7 shadow-2xl dark:border-slate-800 dark:bg-slate-900 sm:p-9"><div class="mb-8"><div class="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500 text-3xl">⛏️</div><h1 class="text-3xl font-black tracking-tight">Мой корч</h1><p class="mt-2 text-slate-500 dark:text-slate-400">Личный майнинг-калькулятор без лишнего шума.</p></div><form id="auth-form" class="space-y-4"><label class="block text-sm font-semibold">Логин<input name="username" required minlength="3" autocomplete="username" class="mt-1.5 w-full rounded-xl border border-slate-300 bg-transparent px-4 py-3 outline-none ring-emerald-500 focus:ring-2 dark:border-slate-700" placeholder="miner_01"></label><label class="block text-sm font-semibold">Пароль<input name="password" type="password" required minlength="6" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}" class="mt-1.5 w-full rounded-xl border border-slate-300 bg-transparent px-4 py-3 outline-none ring-emerald-500 focus:ring-2 dark:border-slate-700" placeholder="Не менее 6 символов"></label><button class="w-full rounded-xl bg-emerald-500 px-4 py-3 font-bold text-slate-950 transition hover:bg-emerald-400">${mode === 'login' ? 'Войти' : 'Создать аккаунт'}</button></form><button id="auth-switch" class="mt-5 w-full text-sm font-semibold text-emerald-600 dark:text-emerald-400">${mode === 'login' ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти'}</button></div></section>`;
+  app.innerHTML = `<section class="page-enter flex min-h-screen items-center justify-center p-5">
+    <div class="auth-panel glass w-full max-w-md rounded-3xl p-7 sm:p-9">
+      <div class="mb-8">
+        <div class="auth-logo mb-4">${ico('logo', 'ico-lg')}</div>
+        <h1 class="auth-title">Мой корч</h1>
+        <p class="mt-2 text-[15px] text-slate-500 dark:text-slate-400">Личный майнинг-калькулятор без лишнего шума. Стекло, аврора и точные цифры.</p>
+      </div>
+      <form id="auth-form" class="space-y-4">
+        <label class="block text-sm font-semibold">Логин
+          <input name="username" required minlength="3" autocomplete="username" class="field" placeholder="miner_01">
+        </label>
+        <label class="block text-sm font-semibold">Пароль
+          <input name="password" type="password" required minlength="6" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}" class="field" placeholder="Не менее 6 символов">
+        </label>
+        <button class="btn btn-accent w-full">${mode === 'login' ? 'Войти' : 'Создать аккаунт'} ${ico('chevron')}</button>
+      </form>
+      <button id="auth-switch" class="mt-5 w-full text-sm font-semibold text-amber-500 transition hover:text-amber-400">
+        ${mode === 'login' ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти'}
+      </button>
+    </div>
+  </section>`;
   document.querySelector('#auth-switch').onclick = () => renderAuth(mode === 'login' ? 'register' : 'login');
   document.querySelector('#auth-form').onsubmit = async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const submit = form.querySelector('button[type="submit"], button:not([type])');
-    const originalText = submit?.textContent;
+    const originalText = submit?.innerHTML;
     if (submit) { submit.disabled = true; submit.textContent = 'Подключаемся…'; }
     try {
       const data = await request(`/auth/${mode === 'login' ? 'login' : 'register'}`, { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) });
       state.token = data.token; state.user = data.user; localStorage.setItem('korch_token', data.token);
-      await refresh(); toast(mode === 'login' ? 'С возвращением!' : 'Аккаунт создан');
+      await refresh(); toast(mode === 'login' ? 'С возвращением!' : 'Аккаунт создан — QTC и первый риг уже ждут');
     } catch (error) {
       // Раньше здесь не было finally/reenable — после первой ошибки кнопка навсегда
       // оставалась "Подключаемся…" и приходилось перезагружать страницу.
-      if (submit) { submit.disabled = false; submit.textContent = originalText; }
+      if (submit) { submit.disabled = false; submit.innerHTML = originalText; }
       toast(error.message, 'error');
     }
   };
 }
 
+/* Sparkline: CSS-бары из величин hashrate карт (даёт "живость" карточке без Canvas).
+   Вызывается с массивом карт всего рига — так соседние карточки получают общий
+   масштаб и различаются по высоте баров. */
+function cardSparkline(rigCards) {
+  const bars = rigCards.slice(0, 9).map((card) => Number(card.hashrate) * Number(card.quantity));
+  if (bars.length < 2) return '';
+  const max = Math.max(...bars, 1);
+  return `<svg class="card-spark" width="100%" height="30" viewBox="0 0 ${bars.length * 12} 30" preserveAspectRatio="none" aria-hidden="true">${bars.map((v, i) => { const h = Math.max(3, Math.round((v / max) * 26)); return `<rect class="bar" x="${i * 12 + 2}" y="${30 - h}" width="7" rx="2.5" height="${h}"/>`; }).join('')}</svg>`;
+}
+
 function renderDashboard() {
   const farmTotals = state.rigs.reduce((sum, rig) => { const result = rigCalculation(rig, state.cardsByRig[rig.id] || []); sum.profit += result.profit; sum.electricityExpense += result.electricityExpense; return sum; }, { profit: 0, electricityExpense: 0 });
-  const selectedRig = state.rigs.find((rig) => rig.id === state.selectedRigId);
+  const selectedRig = state.rigs.find((rig) => String(rig.id) === String(state.selectedRigId));
   const rigTotals = selectedRig ? rigCalculation(selectedRig, state.cards) : { profit: 0, electricityExpense: 0, incomePerMhs: 0 };
-  const rigSubtitle = selectedRig ? (selectedRig.coin ? `${escapeHtml(selectedRig.coin)} · ${money(rigTotals.profit)} чистыми · ${number(avgDailyYield(selectedRig), 6)}/сутки в среднем · ⚡ ${money(selectedRig.electricity_cost)}/кВт·ч` : 'Конфигурация не задана — нажмите «Конфигурация»') : '';
-  const bannerClass = farmTotals.profit > 0 ? 'bg-emerald-500 text-slate-950' : farmTotals.profit < 0 ? 'bg-rose-600 text-white' : 'bg-slate-500 text-white';
-  app.innerHTML = `<div class="page-enter mx-auto min-h-screen max-w-6xl p-4 sm:p-7"><header class="mb-7 flex flex-wrap items-center justify-between gap-3"><div><p class="text-xs font-bold uppercase tracking-[.2em] text-emerald-500">${escapeHtml(state.user.username)}</p><h1 class="text-2xl font-black sm:text-3xl">Мой корч</h1></div><div class="flex flex-wrap justify-end gap-2 sm:gap-3"><button id="settings" class="rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm font-bold dark:border-slate-700">⚙️ Настройки</button><button id="logout-button" class="rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm font-bold dark:border-slate-700">Выйти</button></div></header><section class="grid gap-3 sm:gap-4 sm:grid-cols-2"><article class="stat-card rise-in rounded-2xl ${bannerClass} p-5 shadow-lg"><p class="text-sm font-bold opacity-95">Чистый профит · вся ферма</p><p class="mt-2 text-3xl font-black">${money(farmTotals.profit)}</p><p class="mt-1 text-sm font-medium opacity-90">за 24 часа</p></article><article class="stat-card rise-in rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900" style="animation-delay:40ms"><p class="text-sm font-bold text-slate-500 dark:text-slate-400">Расходы на свет · вся ферма</p><p class="mt-2 text-3xl font-black">${money(farmTotals.electricityExpense)}</p><p class="mt-1 text-sm text-slate-500">за 24 часа</p></article></section><section class="mt-7 sm:mt-8"><div class="mb-3 flex flex-wrap items-center justify-between gap-2"><h2 class="font-bold">Риги</h2><button id="add-rig" class="rounded-xl bg-slate-900 px-3.5 py-2.5 text-sm font-bold text-white dark:bg-slate-100 dark:text-slate-950">＋ Добавить риг</button></div><div class="scroll-row flex gap-2.5 overflow-x-auto pb-2">${state.rigs.map((rig) => `<button data-rig-id="${rig.id}" class="rig-tab shrink-0 rounded-xl px-4 py-2.5 text-sm font-bold ${rig.id === state.selectedRigId ? 'bg-emerald-500 text-slate-950 tab-pop' : 'border border-slate-300 dark:border-slate-700'}">${escapeHtml(rig.name)}</button>`).join('') || '<p class="text-slate-500">Ригов пока нет.</p>'}</div></section><section class="mt-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6"><div class="mb-5 flex flex-wrap items-start justify-between gap-3"><div><p class="text-xs font-bold uppercase tracking-wider text-slate-500">Текущий риг</p><h2 class="text-xl font-black">${escapeHtml(selectedRig?.name || 'Не выбран')}</h2>${selectedRig ? `<p class="mt-1 text-sm text-slate-500">${rigSubtitle}</p>` : ''}</div>${selectedRig ? `<div class="flex shrink-0 gap-1.5"><button id="rename-rig" class="rounded-lg px-2.5 py-1.5 text-sm font-semibold hover:bg-slate-100 dark:hover:bg-slate-800" title="Переименовать риг" aria-label="Переименовать риг">✏️</button><button id="delete-rig" class="rounded-lg px-2.5 py-1.5 text-sm font-semibold text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40">Удалить риг</button></div>` : ''}</div><div id="card-list" class="space-y-3">${state.cards.length ? state.cards.map((card, index) => cardHtml(card, index)).join('') : `<div class="rounded-xl border border-dashed border-slate-300 p-8 text-center text-slate-500 dark:border-slate-700">В этом риге ещё нет оборудования.</div>`}</div>${selectedRig ? `<footer class="mt-6 flex flex-col gap-4 border-t border-slate-200 pt-5 dark:border-slate-800 sm:flex-row sm:items-center sm:justify-between"><div><p class="text-sm text-slate-500">Итого по ригу · 24 часа</p><p class="text-xl font-black text-emerald-500">${money(rigTotals.profit)} <span class="text-sm font-medium text-slate-500">/ свет ${money(rigTotals.electricityExpense)}</span></p></div><div class="flex flex-wrap gap-2 sm:gap-3"><button id="rig-config" class="rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm font-bold dark:border-slate-700">⚙️ Конфигурация</button><button id="add-card" class="rounded-xl bg-emerald-500 px-3.5 py-2.5 text-sm font-bold text-slate-950">＋ Добавить карту</button></div></footer>` : ''}</section></div>`;
+  const rigSubtitle = selectedRig ? (selectedRig.coin ? `<span class="chip">${escapeHtml(selectedRig.coin)}</span> <b class="num ${rigTotals.profit >= 0 ? 'text-amber-500' : 'text-rose-400'}">${money(rigTotals.profit)}</b> чистыми · ${number(avgDailyYield(selectedRig), 6)}/сутки в среднем · <span class="chip">${ico('flash')} ${money(selectedRig.electricity_cost)}/кВт·ч</span>` : 'Конфигурация не задана — нажмите «Конфигурация»') : '';
+  const isNegative = farmTotals.profit < 0;
+  app.innerHTML = `<div class="page-enter mx-auto min-h-screen max-w-6xl p-4 pb-10 sm:p-7">
+    <header class="mb-7 flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center gap-3">
+        <div class="auth-logo" style="width:2.9rem;height:2.9rem;border-radius:15px">${ico('logo', 'ico-lg')}</div>
+        <div>
+          <p class="text-[11px] font-bold uppercase tracking-[.22em] text-amber-500/90">${escapeHtml(state.user.username)}</p>
+          <h1 class="font-display text-[26px] font-extrabold sm:text-3xl">Мой корч</h1>
+        </div>
+      </div>
+      <div class="flex flex-wrap justify-end gap-2 sm:gap-3">
+        <button id="settings" class="btn btn-ghost">${ico('gear')} Настройки</button>
+        <button id="logout-button" class="btn btn-ghost" title="Выйти">${ico('logout')}<span class="max-sm:hidden"> Выйти</span></button>
+      </div>
+    </header>
+
+    <section class="grid gap-3 sm:gap-4 sm:grid-cols-2">
+      <article class="stat-card card-glass rise-in stat-main ${isNegative ? 'negative' : ''}" data-stat-scope="farm">
+        <p class="stat-label">${ico('coin')} Чистый профит · вся ферма</p>
+        <span class="stat-value num" data-tween="farm-profit" data-tween-fmt="money">${money(farmTotals.profit)}</span>
+        <p class="stat-hint">за 24 часа</p>
+      </article>
+      <article class="stat-card card-glass rise-in" style="animation-delay:55ms" data-stat-scope="farm-power">
+        <p class="stat-label">${ico('flash')} Расходы на свет · вся ферма</p>
+        <span class="stat-value num" data-tween="farm-electricity" data-tween-fmt="money">${money(farmTotals.electricityExpense)}</span>
+        <p class="stat-hint">за 24 часа</p>
+      </article>
+    </section>
+
+    <section class="mt-7 sm:mt-8">
+      <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h2 class="font-bold">Риги</h2>
+        <button id="add-rig" class="btn btn-ghost">${ico('plus')} Добавить риг</button>
+      </div>
+      <div id="rig-tabs" class="rig-tabs rise-in" style="animation-delay:100ms">
+        <span class="rig-pill" aria-hidden="true"></span>
+        ${state.rigs.map((rig) => `<button data-rig-id="${rig.id}" class="rig-tab ${String(rig.id) === String(state.selectedRigId) ? 'active' : ''}">${escapeHtml(rig.name)}</button>`).join('') || '<p class="px-3 py-2 text-sm text-slate-500">Ригов пока нет.</p>'}
+      </div>
+    </section>
+
+    <section class="card-glass rise-in mt-6 p-4 sm:p-6" style="animation-delay:150ms">
+      <div class="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p class="text-xs font-bold uppercase tracking-wider text-slate-500">Текущий риг</p>
+          <h2 class="font-display text-xl font-bold">${escapeHtml(selectedRig?.name || 'Не выбран')}</h2>
+          ${selectedRig ? `<p class="mt-1 text-sm text-slate-500 dark:text-slate-400">${rigSubtitle}</p>` : ''}
+        </div>
+        ${selectedRig ? `<div class="flex shrink-0 gap-1.5">
+          <button id="rename-rig" class="btn btn-ghost btn-icon" title="Переименовать риг" aria-label="Переименовать риг">${ico('edit')}</button>
+          <button id="delete-rig" class="btn btn-ghost btn-icon danger" title="Удалить риг" aria-label="Удалить риг">${ico('trash')}</button>
+        </div>` : ''}
+      </div>
+
+      <div id="card-list" class="grid gap-3 sm:grid-cols-2">
+        ${state.cards.length ? state.cards.map((card, index) => cardHtml(card, index)).join('') : `<div class="rounded-2xl border border-dashed border-slate-300 p-8 text-center text-slate-500 dark:border-slate-700 sm:col-span-2">В этом риге ещё нет оборудования.<br><span class="text-xs">Добавьте первую карту кнопкой ниже.</span></div>`}
+      </div>
+
+      ${selectedRig ? `<footer class="mt-6 flex flex-col gap-4 border-t border-white/5 pt-5 sm:flex-row sm:items-center sm:justify-between">
+        <div data-stat-scope="rig">
+          <p class="text-sm text-slate-500">Итого по ригу · 24 часа</p>
+          <p class="mt-0.5 text-xl font-extrabold">
+            <span class="num ${rigTotals.profit >= 0 ? 'text-amber-500' : 'text-rose-400'}" data-tween="rig-profit" data-tween-fmt="money">${money(rigTotals.profit)}</span>
+            <span class="text-sm font-medium text-slate-500">/ свет <span class="num" data-tween="rig-electricity" data-tween-fmt="money">${money(rigTotals.electricityExpense)}</span></span>
+          </p>
+        </div>
+        <div class="flex flex-wrap gap-2 sm:gap-3">
+          <button id="rig-config" class="btn btn-ghost">${ico('gear')} Конфигурация</button>
+          <button id="add-card" class="btn btn-accent">${ico('plus')} Добавить карту</button>
+        </div>
+      </footer>` : ''}
+    </section>
+  </div>`;
+
+  syncTweenDashboard(farmTotals, rigTotals);
+  initPointerGlow();
+  requestAnimationFrame(() => updateRigPill(false));
+
   document.querySelector('#logout-button').onclick = () => logout(true);
   document.querySelector('#add-rig').onclick = () => showRigModal();
   document.querySelectorAll('.rig-tab').forEach((button) => button.onclick = () => switchRig(Number(button.dataset.rigId)));
@@ -176,30 +360,102 @@ function renderDashboard() {
   document.querySelectorAll('[data-delete-card]').forEach((button) => button.onclick = () => deleteCard(Number(button.dataset.deleteCard)));
 }
 
+// Слушатель ресайза/скролла один раз на приложение — пилюля перевыполняет геометрию.
+window.addEventListener('resize', () => updateRigPill(false), { passive: true });
+document.addEventListener('scroll', (event) => {
+  if (event.target?.id === 'rig-tabs') updateRigPill(false);
+}, true);
+
+// Подсветка "стекла" за курсором — делегирует одним слушателем на все .card-glass.
+function initPointerGlow() {
+  if (initPointerGlow.bound) return;
+  initPointerGlow.bound = true;
+  let raf = 0;
+  window.addEventListener('pointermove', (event) => {
+    const card = event.target.closest?.('.card-glass');
+    if (!card) return;
+    if (raf) return; // не плодим лишние рендер-кадры: один на кадр
+    raf = requestAnimationFrame(() => {
+      raf = 0;
+      if (!document.contains(card)) return;
+      const rect = card.getBoundingClientRect();
+      card.style.setProperty('--mx', `${event.clientX - rect.left}px`);
+      card.style.setProperty('--my', `${event.clientY - rect.top}px`);
+    });
+  }, { passive: true });
+}
+
+// "Пилюля" активного рига: измеряем выбранный таб и скользим к нему.
+function updateRigPill(animate = true) {
+  const tabs = document.querySelector('#rig-tabs');
+  if (!tabs) return;
+  const active = tabs.querySelector('.rig-tab.active');
+  const pill = tabs.querySelector('.rig-pill');
+  if (!pill) return;
+  if (!active) { pill.style.opacity = '0'; return; }
+  if (!animate) pill.style.transitionProperty = 'none';
+  pill.style.width = `${active.offsetWidth}px`;
+  pill.style.transform = `translateX(${active.offsetLeft}px)`;
+  pill.style.opacity = '1';
+  if (!animate) requestAnimationFrame(() => { pill.style.transitionProperty = ''; });
+}
+
 function cardHtml(card, index = 0) {
   const totalHashrate = Number(card.hashrate) * Number(card.quantity);
   const totalPower = Number(card.power) * Number(card.quantity);
-  return `<article style="animation-delay:${Math.min(index, 6) * 35}ms" class="rise-in rounded-xl bg-slate-50 p-4 dark:bg-slate-800/70"><div class="flex flex-wrap items-start justify-between gap-3"><div><h3 class="font-black">${escapeHtml(card.model)}</h3><p class="mt-1 text-sm text-slate-500">${number(card.quantity, 0)} шт. · ${number(card.hashrate)} MH/s на карту · ${number(card.power, 0)} W на карту</p></div><div class="flex h-fit shrink-0 gap-1.5"><button data-edit-card="${card.id}" class="rounded-lg p-2.5 hover:bg-slate-200 dark:hover:bg-slate-700" aria-label="Редактировать">✏️</button><button data-delete-card="${card.id}" class="rounded-lg p-2.5 hover:bg-rose-100 dark:hover:bg-rose-950" aria-label="Удалить">❌</button></div></div><div class="mt-4 grid grid-cols-2 gap-2 text-sm"><p><span class="block text-xs text-slate-500">Общий хэш</span><b>${number(totalHashrate)} MH/s</b></p><p><span class="block text-xs text-slate-500">Мощность</span><b>${number(totalPower, 0)} W</b></p></div></article>`;
+  // Спарклайн каждой карты строится по модулю её доли в риге + соседям вокруг,
+  // чтобы соседние карты не показывали одинаковый "пейзаж".
+  return `<article style="animation-delay:${Math.min(index, 8) * 45}ms" class="rise-in glass rounded-2xl p-4">
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h3 class="font-bold">${escapeHtml(card.model)}</h3>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">${number(card.quantity, 0)} шт. · ${number(card.hashrate)} MH/s · ${number(card.power, 0)} W на карту</p>
+      </div>
+      <div class="flex h-fit shrink-0 gap-1.5">
+        <button data-edit-card="${card.id}" class="btn btn-ghost btn-icon" aria-label="Редактировать" title="Редактировать">${ico('edit')}</button>
+        <button data-delete-card="${card.id}" class="btn btn-ghost btn-icon danger" aria-label="Удалить" title="Удалить">${ico('trash')}</button>
+      </div>
+    </div>
+    <div class="mt-4 grid grid-cols-2 gap-2 text-sm">
+      <p><span class="block text-xs text-slate-500">Общий хэш</span><b class="num text-[15px]">${number(totalHashrate)}</b> <span class="text-xs text-slate-500">MH/s</span></p>
+      <p><span class="block text-xs text-slate-500">Мощность</span><b class="num text-[15px]">${number(totalPower, 0)}</b> <span class="text-xs text-slate-500">W</span></p>
+    </div>
+    ${cardSparkline(state.cards)}
+  </article>`;
 }
 
 function modal(title, content) {
-  const node = document.createElement('div'); node.className = 'modal-backdrop fixed inset-0 z-40 flex items-end justify-center bg-slate-950/60 p-3 sm:items-center';
+  const node = document.createElement('div');
+  node.className = 'modal-backdrop';
   // title вставляется через textContent через h2 — чтобы исключить XSS даже если
   // вызывающий забывает экранировать имя рига/монеты. Поэтому все вызовы ниже
   // передают «сырую» строку и не экранируют сами.
-  node.innerHTML = `<div class="modal-panel w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl dark:bg-slate-900"><div class="mb-5 flex items-center justify-between gap-3"><h2 class="modal-title text-xl font-black"></h2><button class="modal-close rounded-lg p-2.5 text-lg hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Закрыть">✕</button></div>${content}</div>`;
+  node.innerHTML = `<div class="modal-panel"><div class="mb-5 flex items-center justify-between gap-3"><h2 class="modal-title font-display text-lg font-bold"></h2><button class="modal-close btn btn-ghost btn-icon" aria-label="Закрыть">${ico('close')}</button></div>${content}</div>`;
   node.querySelector('.modal-title').textContent = title;
-  node.addEventListener('click', (event) => { if (event.target === node) closeModal(node); }); node.querySelector('.modal-close').onclick = () => closeModal(node); document.body.append(node); return node;
+  node.addEventListener('click', (event) => { if (event.target === node) closeModal(node); });
+  node.querySelector('.modal-close').onclick = () => closeModal(node);
+  document.body.append(node);
+  return node;
 }
 
 function showRigModal() {
   // Отправку формы полностью обрабатывает глобальный оптимистичный listener (см. ниже).
-  modal('Новый риг', `<form id="rig-form" class="space-y-4"><label class="block text-sm font-semibold">Название<input name="name" required maxlength="80" class="mt-1.5 w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2.5 dark:border-slate-700" placeholder="Например, Балкон"></label><button class="w-full rounded-xl bg-emerald-500 py-3 font-bold text-slate-950">Создать риг</button></form>`);
+  modal('Новый риг', `<form id="rig-form" class="space-y-4">
+    <label class="block text-sm font-semibold">Название
+      <input name="name" required maxlength="80" class="field" placeholder="Например, Балкон">
+    </label>
+    <button class="btn btn-accent w-full">${ico('plus')} Создать риг</button>
+  </form>`);
 }
 
 function showRenameRigModal(rig) {
   if (!rig) return;
-  const node = modal(`Переименовать риг`, `<form id="rig-rename-form" data-rig-id="${rig.id}" class="space-y-4"><label class="block text-sm font-semibold">Новое название<input name="name" required maxlength="80" value="${escapeHtml(rig.name)}" class="mt-1.5 w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2.5 dark:border-slate-700" placeholder="Например, Балкон"></label><button class="w-full rounded-xl bg-emerald-500 py-3 font-bold text-slate-950">Сохранить</button></form>`);
+  const node = modal(`Переименовать риг`, `<form id="rig-rename-form" data-rig-id="${rig.id}" class="space-y-4">
+    <label class="block text-sm font-semibold">Новое название
+      <input name="name" required maxlength="80" value="${escapeHtml(rig.name)}" class="field" placeholder="Например, Балкон">
+    </label>
+    <button class="btn btn-accent w-full">Сохранить</button>
+  </form>`);
   node.querySelector('input').select();
 }
 
@@ -207,45 +463,101 @@ function showRigConfigModal(rig) {
   if (!rig) return;
   if (!state.coins.length) return toast('Сначала добавьте хотя бы одну монету в настройках', 'error');
   const coinOptions = state.coins.map((coin) => `<option value="${escapeHtml(coin.name)}" ${coin.name.toLowerCase() === String(rig.coin || '').toLowerCase() ? 'selected' : ''}>${escapeHtml(coin.name)} · ${money(coin.price_usd)}</option>`).join('');
-  const node = modal(`Конфигурация: ${rig.name}`, `<form data-rig-config="${rig.id}" class="space-y-4"><label class="block text-sm font-semibold">Монета<select name="coin" required class="field">${coinOptions}</select></label><label class="block text-sm font-semibold">Добыча монет в сутки, весь риг<input name="coin_per_day" type="number" min="0" step="any" required value="${rig.coin_per_day ?? 0}" class="field"></label><label class="block text-sm font-semibold">Цена за розетку, $ за кВт·ч<input name="electricity_cost" type="number" min="0" step="0.001" required value="${rig.electricity_cost ?? 0}" class="field"></label><div class="rounded-xl bg-slate-100 p-3.5 dark:bg-slate-800"><p class="mb-3 text-sm font-bold">⏱️ Время</p><div class="grid grid-cols-2 gap-2.5"><label class="text-xs font-bold text-slate-500">Рабочих суток в цикле · 18ч<input name="working_days" type="number" min="0" max="31" step="1" required value="${rig.working_days ?? 5}" class="field mt-1"></label><label class="text-xs font-bold text-slate-500">Выходных суток в цикле · 24ч<input name="weekend_days" type="number" min="0" max="31" step="1" required value="${rig.weekend_days ?? 2}" class="field mt-1"></label></div><label class="mt-2.5 block text-xs font-bold text-slate-500">Введённая добыча в сутки основана на<select name="calculation_mode" required class="field mt-1"><option value="working_days" ${rig.calculation_mode !== 'weekend_days' ? 'selected' : ''}>Рабочих сутках (18ч)</option><option value="weekend_days" ${rig.calculation_mode === 'weekend_days' ? 'selected' : ''}>Выходных сутках (24ч)</option></select></label></div><p class="rounded-xl bg-slate-100 p-3 text-xs text-slate-500 dark:bg-slate-800">Средняя добыча в сутки считается автоматически по графику работы рига, а доход на 1 MH/s — от неё ÷ суммарный хешрейт всех карт этого рига. Значения в код не зашиты.</p><button class="w-full rounded-xl bg-emerald-500 py-3 font-bold text-slate-950">Сохранить конфигурацию</button></form>`);
-  node.querySelectorAll('.field').forEach((input) => input.className = 'field mt-1.5 w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2.5 outline-none focus:ring-2 focus:ring-emerald-500 dark:border-slate-700');
+  modal(`Конфигурация: ${rig.name}`, `<form data-rig-config="${rig.id}" class="space-y-4">
+    <label class="block text-sm font-semibold">Монета
+      <select name="coin" required class="field">${coinOptions}</select>
+    </label>
+    <label class="block text-sm font-semibold">Добыча монет в сутки, весь риг
+      <input name="coin_per_day" type="number" min="0" step="any" required value="${rig.coin_per_day ?? 0}" class="field">
+    </label>
+    <label class="block text-sm font-semibold">Цена за розетку, $ за кВт·ч
+      <input name="electricity_cost" type="number" min="0" step="0.001" required value="${rig.electricity_cost ?? 0}" class="field">
+    </label>
+    <div class="glass rounded-2xl p-3.5">
+      <p class="mb-3 flex items-center gap-2 text-sm font-bold">${ico('flash')} Время</p>
+      <div class="grid grid-cols-2 gap-2.5">
+        <label class="text-xs font-bold text-slate-500">Рабочих суток в цикле · 18ч<input name="working_days" type="number" min="0" max="31" step="1" required value="${rig.working_days ?? 5}" class="field"></label>
+        <label class="text-xs font-bold text-slate-500">Выходных суток в цикле · 24ч<input name="weekend_days" type="number" min="0" max="31" step="1" required value="${rig.weekend_days ?? 2}" class="field"></label>
+      </div>
+      <label class="mt-2.5 block text-xs font-bold text-slate-500">Введённая добыча в сутки основана на
+        <select name="calculation_mode" required class="field">
+          <option value="working_days" ${rig.calculation_mode !== 'weekend_days' ? 'selected' : ''}>Рабочих сутках (18ч)</option>
+          <option value="weekend_days" ${rig.calculation_mode === 'weekend_days' ? 'selected' : ''}>Выходных сутках (24ч)</option>
+        </select>
+      </label>
+    </div>
+    <p class="rounded-xl p-3 text-xs text-slate-500 glass">Средняя добыча в сутки считается автоматически по графику работы рига, а доход на 1 MH/s — от неё ÷ суммарный хешрейт всех карт этого рига. Значения в код не зашиты.</p>
+    <button class="btn btn-accent w-full">Сохранить конфигурацию</button>
+  </form>`);
   // Отправку формы полностью обрабатывает глобальный оптимистичный listener (см. ниже).
 }
 
 function showSettingsModal() {
-  const node = modal('Настройки', `<div class="mb-5 flex items-center justify-between gap-3 rounded-xl bg-slate-100 p-3 dark:bg-slate-800"><div><p class="text-sm font-bold">Тема оформления</p><p class="text-xs text-slate-500">Тёмная или светлая</p></div><button id="settings-theme-toggle" class="rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-lg dark:border-slate-700 dark:bg-slate-900">${state.theme === 'dark' ? '☀️' : '🌙'}</button></div><p class="mb-2 text-sm font-bold">🪙 Монеты</p><p class="mb-4 text-sm text-slate-500">Курс в USD применяется сразу везде, где используется эта монета.</p><div id="settings-coin-list" class="space-y-2.5"></div><form id="settings-new-coin" class="mt-4 grid grid-cols-2 gap-2.5 border-t border-slate-200 pt-4 dark:border-slate-700"><label class="text-xs font-bold text-slate-500">Название<input name="name" required maxlength="30" placeholder="BTC" class="settings-field"></label><label class="text-xs font-bold text-slate-500">Курс, $<input name="price_usd" type="number" required min="0" step="any" placeholder="0.00" class="settings-field"></label><button class="col-span-2 rounded-xl bg-emerald-500 py-2.5 font-bold text-slate-950">＋ Добавить монету</button></form>`);
-  node.querySelectorAll('.settings-field').forEach((input) => input.className = 'settings-field mt-1.5 w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2.5 outline-none focus:ring-2 focus:ring-emerald-500 dark:border-slate-700');
+  const node = modal('Настройки', `
+    <div class="glass mb-5 flex items-center justify-between gap-3 rounded-2xl p-3">
+      <div>
+        <p class="text-sm font-bold">Тема оформления</p>
+        <p class="text-xs text-slate-500">Аврора гаснет — стекло остаётся</p>
+      </div>
+      <button id="settings-theme-toggle" class="btn btn-ghost btn-icon" title="Переключить тему">${state.theme === 'dark' ? ico('sun') : ico('moon')}</button>
+    </div>
+    <p class="mb-2 flex items-center gap-2 text-sm font-bold">${ico('coin')} Монеты</p>
+    <p class="mb-4 text-sm text-slate-500">Курс в USD применяется сразу везде, где используется эта монета.</p>
+    <div id="settings-coin-list" class="space-y-2.5"></div>
+    <form id="settings-new-coin" class="mt-4 grid grid-cols-2 gap-2.5 border-t border-white/5 pt-4">
+      <label class="text-xs font-bold text-slate-500">Название<input name="name" required maxlength="30" placeholder="BTC" class="settings-field"></label>
+      <label class="text-xs font-bold text-slate-500">Курс, $<input name="price_usd" type="number" required min="0" step="any" placeholder="0.00" class="settings-field"></label>
+      <button class="btn btn-accent col-span-2">${ico('plus')} Добавить монету</button>
+    </form>`);
   node.querySelector('#settings-theme-toggle').onclick = () => {
     // Тему переключаем без renderDashboard(): DOM дашборда за модалкой не пересоздаётся,
     // поэтому смена dark-класса на <html> проходит плавным переходом (см. styles.css),
     // а не мгновенной пересборкой всего экрана.
-    state.theme = state.theme === 'dark' ? 'light' : 'dark'; applyTheme();
-    node.querySelector('#settings-theme-toggle').textContent = state.theme === 'dark' ? '☀️' : '🌙';
+    state.theme = state.theme === 'dark' ? 'light' : 'dark';
+    applyTheme();
+    node.querySelector('#settings-theme-toggle').innerHTML = state.theme === 'dark' ? ico('sun') : ico('moon');
   };
   const coinPanel = node.querySelector('#settings-coin-list');
-  const renderCoins = () => { coinPanel.innerHTML = state.coins.map((coin) => `<form data-settings-coin="${coin.id}" class="grid grid-cols-[1fr_1fr_auto] items-end gap-2.5 rounded-xl bg-slate-100 p-3 dark:bg-slate-800"><label class="text-xs font-bold text-slate-500">Монета<input name="name" required maxlength="30" value="${escapeHtml(coin.name)}" class="settings-field"></label><label class="text-xs font-bold text-slate-500">Курс, $<input name="price_usd" type="number" required min="0" step="any" value="${coin.price_usd}" class="settings-field"></label><div class="flex gap-1.5"><button title="Сохранить" class="rounded-lg bg-emerald-500 px-2.5 py-2.5 text-sm font-black text-slate-950">✓</button><button type="button" data-settings-delete="${coin.id}" title="Удалить" class="rounded-lg px-2.5 py-2.5 text-sm hover:bg-rose-100 dark:hover:bg-rose-950/40">🗑️</button></div></form>`).join('') || '<p class="text-sm text-slate-500">Добавьте первую монету.</p>'; coinPanel.querySelectorAll('.settings-field').forEach((input) => input.className = 'settings-field mt-1 w-full rounded-lg border border-slate-300 bg-transparent px-2 py-2 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-emerald-500 dark:border-slate-600 dark:text-slate-100'); };
+  const renderCoins = () => {
+    coinPanel.innerHTML = state.coins.map((coin) => `<form data-settings-coin="${coin.id}" class="glass grid grid-cols-[1fr_1fr_auto] items-end gap-2.5 rounded-2xl p-3">
+      <label class="text-xs font-bold text-slate-500">Монета<input name="name" required maxlength="30" value="${escapeHtml(coin.name)}" class="settings-field"></label>
+      <label class="text-xs font-bold text-slate-500">Курс, $<input name="price_usd" type="number" required min="0" step="any" value="${coin.price_usd}" class="settings-field"></label>
+      <div class="flex gap-1.5">
+        <button title="Сохранить" class="btn btn-accent btn-icon">${ico('check')}</button>
+        <button type="button" data-settings-delete="${coin.id}" title="Удалить" class="btn btn-ghost btn-icon danger">${ico('trash')}</button>
+      </div>
+    </form>`).join('') || '<p class="text-sm text-slate-500">Добавьте первую монету.</p>';
+  };
   renderCoins();
 }
 
 function showCardModal(card = null) {
   const isEdit = Boolean(card); const values = card || { model: '', quantity: 1, hashrate: '', power: '' };
-  const node = modal(isEdit ? 'Редактировать карту' : 'Добавить карту', `<form id="card-form" class="grid gap-3 sm:grid-cols-2 sm:gap-4"><label class="text-sm font-semibold sm:col-span-2">Модель<input name="model" required maxlength="80" value="${escapeHtml(values.model)}" class="field"></label><label class="text-sm font-semibold">Количество<input name="quantity" type="number" required min="1" step="1" value="${values.quantity}" class="field"></label><label class="text-sm font-semibold">Хэш на 1 карту, MH/s<input name="hashrate" type="number" required min="0" step="any" value="${values.hashrate}" class="field"></label><label class="text-sm font-semibold sm:col-span-2">Мощность на 1 карту, W<input name="power" type="number" required min="0" step="1" value="${values.power}" class="field"></label><button class="sm:col-span-2 rounded-xl bg-emerald-500 py-3 font-bold text-slate-950">${isEdit ? 'Сохранить изменения' : 'Добавить карту'}</button></form>`);
-  node.querySelectorAll('.field').forEach((input) => input.className = 'field mt-1.5 w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2.5 outline-none focus:ring-2 focus:ring-emerald-500 dark:border-slate-700');
+  modal(isEdit ? 'Редактировать карту' : 'Добавить карту', `<form id="card-form" class="grid gap-3 sm:grid-cols-2 sm:gap-4">
+    <label class="text-sm font-semibold sm:col-span-2">Модель<input name="model" required maxlength="80" value="${escapeHtml(values.model)}" class="field" placeholder="RTX 3070"></label>
+    <label class="text-sm font-semibold">Количество<input name="quantity" type="number" required min="1" step="1" value="${values.quantity}" class="field"></label>
+    <label class="text-sm font-semibold">Хэш на 1 карту, MH/s<input name="hashrate" type="number" required min="0" step="any" value="${values.hashrate}" class="field"></label>
+    <label class="text-sm font-semibold sm:col-span-2">Мощность на 1 карту, W<input name="power" type="number" required min="0" step="1" value="${values.power}" class="field"></label>
+    <button class="btn btn-accent sm:col-span-2">${isEdit ? 'Сохранить изменения' : 'Добавить карту'}</button>
+  </form>`);
   // Отправку формы полностью обрабатывает глобальный оптимистичный listener (см. ниже).
 }
 
 // Мгновенное переключение рига: карты уже загружены и лежат в кэше state.cardsByRig
 // (см. refresh()), поэтому сети ждать не нужно — рендерим сразу, а сверяем в фоне.
 function switchRig(rigId) {
-  if (rigId === state.selectedRigId) return;
+  if (String(rigId) === String(state.selectedRigId)) return;
   state.selectedRigId = rigId;
   state.cards = state.cardsByRig[rigId] || [];
+  // Переносим .active на новый таб — пилюля плавно скользнёт (см. switchRig finalize)
+  document.querySelectorAll('.rig-tab').forEach((tab) => tab.classList.toggle('active', Number(tab.dataset.rigId) === Number(rigId)));
   renderDashboard();
+  requestAnimationFrame(() => updateRigPill(true));
   saveCache(); // выбор рига — не optimistic-данные, кэшировать безопасно сразу
   request(`/rigs/${rigId}/cards`).then((cards) => {
     const changed = JSON.stringify(cards) !== JSON.stringify(state.cardsByRig[rigId] || []);
     state.cardsByRig[rigId] = cards;
-    if (state.selectedRigId === rigId && changed) { state.cards = cards; renderAndCache(); }
+    if (String(state.selectedRigId) === String(rigId) && changed) { state.cards = cards; renderAndCache(); }
   }).catch(() => { /* тихая сверка — не мешаем тостом при обычном переключении */ });
 }
 
@@ -259,7 +571,7 @@ async function deleteCard(cardId) {
 async function deleteSelectedRig() {
   if (!confirm('Удалить риг и всё оборудование в нём?')) return;
   const rigId = state.selectedRigId; const previousRigs = [...state.rigs]; const previousByRig = { ...state.cardsByRig }; const previousCards = [...state.cards]; const previousSelected = state.selectedRigId;
-  state.rigs = state.rigs.filter((rig) => rig.id !== rigId); delete state.cardsByRig[rigId];
+  state.rigs = state.rigs.filter((rig) => String(rig.id) !== String(rigId)); delete state.cardsByRig[rigId];
   state.selectedRigId = state.rigs[0]?.id || null; state.cards = state.cardsByRig[state.selectedRigId] || [];
   renderDashboard(); toast('Риг удалён');
   try { await request(`/rigs/${rigId}`, { method: 'DELETE' }); saveCache(); } catch (error) { state.rigs = previousRigs; state.cardsByRig = previousByRig; state.cards = previousCards; state.selectedRigId = previousSelected; renderDashboard(); toast(`Не удалось удалить риг: ${error.message}`, 'error'); }
@@ -270,7 +582,7 @@ async function refresh() {
   const data = await request('/bootstrap');
   state.user = data.user; state.coins = data.coins; state.rigs = data.rigs;
   state.cardsByRig = data.cardsByRig || {};
-  if (!state.rigs.some((rig) => rig.id === state.selectedRigId)) state.selectedRigId = state.rigs[0]?.id || null;
+  if (!state.rigs.some((rig) => String(rig.id) === String(state.selectedRigId))) state.selectedRigId = state.rigs[0]?.id || null;
   state.cards = state.cardsByRig[state.selectedRigId] || [];
   renderDashboard();
   saveCache();
@@ -386,7 +698,7 @@ async function init() {
     state.user = cached.user; state.coins = cached.coins || []; state.rigs = cached.rigs || [];
     state.cardsByRig = cached.cardsByRig || {};
     state.selectedRigId = cached.selectedRigId;
-    if (!state.rigs.some((rig) => rig.id === state.selectedRigId)) state.selectedRigId = state.rigs[0]?.id || null;
+    if (!state.rigs.some((rig) => String(rig.id) === String(state.selectedRigId))) state.selectedRigId = state.rigs[0]?.id || null;
     // КЛЮЧЕВАЯ правка: без этого state.cards оставался [] и GPU пропадали из
     // выбранного рига до следующего refresh()/переключения рига.
     state.cards = state.cardsByRig[state.selectedRigId] || [];
@@ -397,7 +709,7 @@ async function init() {
   } catch (error) {
     toast(error.message, 'error');
     if (!state.user) {
-      app.innerHTML = `<section class="page-enter flex min-h-screen items-center justify-center p-6 text-center"><div><p class="mb-4 text-slate-500">Не удалось загрузить данные.</p><button id="retry" class="rounded-xl bg-emerald-500 px-4 py-2.5 font-bold text-slate-950">Повторить</button></div></section>`;
+      app.innerHTML = `<section class="page-enter flex min-h-screen items-center justify-center p-6 text-center"><div><p class="mb-4 text-slate-500">Не удалось загрузить данные.</p><button id="retry" class="btn btn-accent">Повторить</button></div></section>`;
       document.querySelector('#retry').onclick = init;
     }
   }

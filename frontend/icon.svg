@@ -1,1 +1,33 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="42" fill="#0b1120"/><path d="M43 67h106v58H43z" fill="#22c55e"/><path d="M57 84h50M57 100h35M122 84h13M122 103h13" stroke="#0b1120" stroke-width="9" stroke-linecap="round"/><path d="M77 125v22m38-22v22M60 147h72" stroke="#94a3b8" stroke-width="9" stroke-linecap="round"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="warm" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fbbf24"/>
+      <stop offset=".55" stop-color="#f59e0b"/>
+      <stop offset="1" stop-color="#f97316"/>
+    </linearGradient>
+    <linearGradient id="glass-shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".34"/>
+      <stop offset=".5" stop-color="#ffffff" stop-opacity=".08"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="halo" cx=".5" cy=".45" r=".62">
+      <stop offset="0" stop-color="#fb923c" stop-opacity=".5"/>
+      <stop offset="1" stop-color="#fb923c" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Тёмная стеклянная плитка (maskable-safe: ключевой контент в пределах 80%) -->
+  <rect width="512" height="512" rx="112" fill="#0a0d16"/>
+  <rect width="512" height="512" rx="112" fill="url(#halo)"/>
+  <rect x="40" y="40" width="432" height="432" rx="92" fill="#0e1220" opacity=".62"/>
+  <rect x="40" y="40" width="432" height="432" rx="92" fill="url(#glass-shine)"/>
+
+  <!-- Кирка -->
+  <g transform="rotate(-24 256 268)" stroke="url(#warm)" stroke-width="34" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M186 168c58-58 150-58 208 0l14 14-32 32-14-14c-36-36-96-36-132 0Z"/>
+    <path d="M292 232 200 324"/>
+  </g>
+  <!-- Жила в месте удара -->
+  <circle cx="212" cy="312" r="26" fill="url(#warm)"/>
+  <circle cx="212" cy="312" r="46" fill="#fb923c" opacity=".18"/>
+</svg>
