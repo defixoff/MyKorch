@@ -268,9 +268,7 @@ html:not(.dark) .stat-main .stat-label .ico { color: #d97706; }
 .rig-tab.active { color: var(--accent-ink); }
 
 /* --- Карточки GPU -------------------------------------------------------- */
-.card-spark { display: block; margin-top: .9rem; opacity: .85; }
-.card-spark .bar { fill: rgba(251, 146, 60, .4); }
-.card-spark .bar:last-child { fill: var(--accent); }
+/* (спарклайн удалён — бар-столбики выглядели как "яичные" овалы) */
 
 /* --- Появление: страница, элементы, табы --------------------------------- */
 .page-enter { animation: rise-in .38s var(--ease-out); }
@@ -294,8 +292,9 @@ html:not(.dark) .stat-main .stat-label .ico { color: #d97706; }
 @media (min-width: 640px) { .modal-backdrop { align-items: center; } }
 .modal-panel {
   width: 100%; max-width: 32rem;
-  max-height: min(88dvh, 100%);
+  max-height: min(96dvh, 100%); /* на мобиле подтягивается почти до верха, не обрезая форму */
   overflow-y: auto;
+  overscroll-behavior: contain;
   border-radius: 22px; padding: 1.25rem;
   background: var(--glass-bg-strong);
   -webkit-backdrop-filter: blur(26px) saturate(1.6);
@@ -305,8 +304,9 @@ html:not(.dark) .stat-main .stat-label .ico { color: #d97706; }
   animation: sheet-in .42s var(--ease-spring);
   will-change: transform, opacity;
 }
-@media (min-width: 640px) { .modal-panel { animation-name: modal-in; } }
-@media (max-width: 639px) { .modal-panel { padding-bottom: calc(1.25rem + env(safe-area-inset-bottom)); border-radius: 22px 22px 16px 16px; } }
+@media (min-width: 640px) { .modal-panel { animation-name: modal-in; max-height: min(88dvh, 760px); } }
+@media (max-width: 639px) {
+  .modal-panel { padding-bottom: calc(1.25rem + env(safe-area-inset-bottom)); border-radius: 22px 22px 16px 16px; }
 .modal-backdrop.closing { animation: fade-out .18s ease-in forwards; }
 .modal-backdrop.closing .modal-panel { animation: sheet-out .2s cubic-bezier(.5, 0, .75, 0) forwards; }
 @keyframes modal-in { from { opacity: 0; transform: translateY(22px) scale(.95); } to { opacity: 1; transform: translateY(0) scale(1); } }

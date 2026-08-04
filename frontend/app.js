@@ -256,15 +256,7 @@ function renderAuth(mode = 'login') {
   };
 }
 
-/* Sparkline: CSS-бары из величин hashrate карт (даёт "живость" карточке без Canvas).
-   Вызывается с массивом карт всего рига — так соседние карточки получают общий
-   масштаб и различаются по высоте баров. */
-function cardSparkline(rigCards) {
-  const bars = rigCards.slice(0, 9).map((card) => Number(card.hashrate) * Number(card.quantity));
-  if (bars.length < 2) return '';
-  const max = Math.max(...bars, 1);
-  return `<svg class="card-spark" width="100%" height="30" viewBox="0 0 ${bars.length * 12} 30" preserveAspectRatio="none" aria-hidden="true">${bars.map((v, i) => { const h = Math.max(3, Math.round((v / max) * 26)); return `<rect class="bar" x="${i * 12 + 2}" y="${30 - h}" width="7" rx="2.5" height="${h}"/>`; }).join('')}</svg>`;
-}
+/* Sparkline removed: бары выглядели как «яичные» овалы под картами на всех карточках. */
 
 function renderDashboard() {
   const farmTotals = state.rigs.reduce((sum, rig) => { const result = rigCalculation(rig, state.cardsByRig[rig.id] || []); sum.profit += result.profit; sum.electricityExpense += result.electricityExpense; return sum; }, { profit: 0, electricityExpense: 0 });
@@ -328,13 +320,14 @@ function renderDashboard() {
         ${state.cards.length ? state.cards.map((card, index) => cardHtml(card, index)).join('') : `<div class="rounded-2xl border border-dashed border-slate-300 p-8 text-center text-slate-500 dark:border-slate-700 sm:col-span-2">В этом риге ещё нет оборудования.<br><span class="text-xs">Добавьте первую карту кнопкой ниже.</span></div>`}
       </div>
 
-      ${selectedRig ? `<footer class="mt-6 flex flex-col gap-4 border-t border-white/5 pt-5 sm:flex-row sm:items-center sm:justify-between">
+      ${selectedRig ? `<footer class="rig-footer mt-6 flex flex-col gap-4 border-t border-white/5 pt-5 sm:flex-row sm:items-center sm:justify-between">
         <div data-stat-scope="rig">
           <p class="text-sm text-slate-500">Итого по ригу · 24 часа</p>
           <p class="mt-0.5 text-xl font-extrabold">
             <span class="num ${rigTotals.profit >= 0 ? 'text-amber-500' : 'text-rose-400'}" data-tween="rig-profit" data-tween-fmt="money">${money(rigTotals.profit)}</span>
             <span class="text-sm font-medium text-slate-500">/ свет <span class="num" data-tween="rig-electricity" data-tween-fmt="money">${money(rigTotals.electricityExpense)}</span></span>
           </p>
+          <p class="rig-total-hash font-display num mt-2 text-[17px] font-extrabold text-amber-500/95">${number(rigTotals.totalHashrate, 2)} MH/s <span class="text-[12px] font-medium text-slate-500">· общий хэш рига</span></p>
         </div>
         <div class="flex flex-wrap gap-2 sm:gap-3">
           <button id="rig-config" class="btn btn-ghost">${ico('gear')} Конфигурация</button>
@@ -403,8 +396,6 @@ function updateRigPill(animate = true) {
 function cardHtml(card, index = 0) {
   const totalHashrate = Number(card.hashrate) * Number(card.quantity);
   const totalPower = Number(card.power) * Number(card.quantity);
-  // Спарклайн каждой карты строится по модулю её доли в риге + соседям вокруг,
-  // чтобы соседние карты не показывали одинаковый "пейзаж".
   return `<article style="animation-delay:${Math.min(index, 8) * 45}ms" class="rise-in glass rounded-2xl p-4">
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
@@ -420,7 +411,6 @@ function cardHtml(card, index = 0) {
       <p><span class="block text-xs text-slate-500">Общий хэш</span><b class="num text-[15px]">${number(totalHashrate)}</b> <span class="text-xs text-slate-500">MH/s</span></p>
       <p><span class="block text-xs text-slate-500">Мощность</span><b class="num text-[15px]">${number(totalPower, 0)}</b> <span class="text-xs text-slate-500">W</span></p>
     </div>
-    ${cardSparkline(state.cards)}
   </article>`;
 }
 
