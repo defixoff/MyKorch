@@ -386,7 +386,11 @@ function updateRigPill(animate = true) {
   const pill = tabs.querySelector('.rig-pill');
   if (!pill) return;
   if (!active) { pill.style.opacity = '0'; return; }
-  if (!animate) pill.style.transitionProperty = 'none';
+  if (!animate) { pill.style.transitionProperty = 'none'; pill.classList.remove('moving'); }
+  else {
+    pill.classList.add('moving');
+    setTimeout(() => pill.classList.remove('moving'), 500);
+  }
   pill.style.width = `${active.offsetWidth}px`;
   pill.style.transform = `translateX(${active.offsetLeft}px)`;
   pill.style.opacity = '1';
