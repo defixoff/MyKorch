@@ -306,6 +306,15 @@ class Credentials(BaseModel):
     password: str = Field(min_length=6, max_length=128)
 
 
+class ChangePasswordInput(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=6, max_length=128)
+
+
+class ResetPasswordInput(BaseModel):
+    username: str = Field(min_length=3, max_length=32, pattern=r"^[\w.-]+$")
+
+
 class RigInput(BaseModel):
     name: str = Field(min_length=1, max_length=80)
 
@@ -418,6 +427,30 @@ def login(credentials: Credentials, request: Request) -> dict[str, Any]:
     if user is None or not verify_password(credentials.password, user["hashed_password"]):
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
     return {"token": create_token(user["id"], user["username"]), "user": user_payload(user)}
+
+
+@app.post("/api/auth/change-password")
+def change_password(payload: ChangePasswordInput, user: dict[str, Any] = Depends(authorized_user)) -> dict[str, Any]:
+    with database() as connection:
+        row = run(connection, "SELECT hashed_password FROM users WHERE id = %s", (user["id"],)).fetchone()
+        if not row or not verify_password(payload.current_password, row["hashed_password"]):
+            raise HTTPException(status_code=401, detail="Текущий пароль неверный")
+        run(connection, "UPDATE users SET hashed_password = %s WHERE id = %s", (password_hash(payload.new_password), user["id"]))
+    return {"ok": True}
+
+
+@app.post("/api/auth/reset-password")
+def reset_password(payload: ResetPasswordInput, request: Request) -> dict[str, Any]:
+    enforce_auth_rate_limit(request, payload.username.strip())
+    with database() as connection:
+        row = run(connection, "SELECT id FROM users WHERE username = %s", (payload.username.strip(),)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Пользователь с таким логином не найден")
+        new_password = secrets.token_urlsafe(9)
+        run(connection, "UPDATE users SET hashed_password = %s WHERE id = %s", (password_hash(new_password), row["id"]))
+    # Внимание: возвращаем пароль в ответе. Для локального калькулятора это приемлемо,
+    # учётка самописная, сброс без email/PIN.
+    return {"ok": True, "password": new_password, "username": payload.username.strip()}
 
 
 @app.get("/api/me")

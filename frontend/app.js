@@ -61,6 +61,40 @@ const number = (value, digits = 2) => new Intl.NumberFormat('ru-RU', { maximumFr
 /* Иконки: ico('gear') → <svg><use #i-gear></svg>. Спрайт объявлен в index.html. */
 const ico = (name, extra = '') => `<svg class="ico ${extra}" aria-hidden="true"><use href="#i-${name}"></use></svg>`;
 
+/* Кастомный glass-dropdown: native <select> в тёмной теме показывает нечитаемый
+   системный попап (его нельзя стилизовать). Значение живёт в скрытом input[name],
+   поэтому FormData и существующий submit-handler ничего не замечают. */
+function dropdownHtml(name, options, current) {
+  const norm = (v) => String(v || '').toLowerCase();
+  const cur = options.find((o) => norm(o.value) === norm(current)) || options[0];
+  return `<div class="dd" data-dd>
+    <input type="hidden" name="${name}" value="${escapeHtml(cur?.value ?? '')}">
+    <button type="button" class="dd-btn field" aria-haspopup="listbox">${escapeHtml(cur?.label ?? '')}${ico('chevron', 'dd-caret')}</button>
+    <ul class="dd-list" role="listbox">${options.map((o) => `<li><button type="button" class="dd-item ${o === cur ? 'selected' : ''}" data-value="${escapeHtml(o.value)}">${o.label}</button></li>`).join('')}</ul>
+  </div>`;
+}
+
+function initDropdowns(root) {
+  root.querySelectorAll('[data-dd]').forEach((dd) => {
+    const input = dd.querySelector('input');
+    dd.querySelector('.dd-btn').onclick = () => {
+      const wasOpen = dd.classList.contains('open');
+      document.querySelectorAll('.dd.open').forEach((d) => d.classList.remove('open'));
+      dd.classList.toggle('open', !wasOpen);
+    };
+    dd.querySelectorAll('.dd-item').forEach((item) => item.onclick = () => {
+      input.value = item.dataset.value;
+      dd.querySelector('.dd-btn').firstChild.textContent = item.textContent;
+      dd.querySelectorAll('.dd-item').forEach((i) => i.classList.toggle('selected', i === item));
+      dd.classList.remove('open');
+    });
+  });
+}
+// Клик мимо любого открытого дропдауна — закрыть.
+document.addEventListener('click', (event) => {
+  if (!event.target.closest('[data-dd]')) document.querySelectorAll('.dd.open').forEach((d) => d.classList.remove('open'));
+});
+
 // Кэш последнего известного состояния — чтобы при следующем открытии сайта интерфейс
 // отрисовался мгновенно, а не показывал пустой фон, пока идёт запрос к серверу.
 function saveCache() {
@@ -234,9 +268,12 @@ function renderAuth(mode = 'login') {
       <button id="auth-switch" class="mt-5 w-full text-sm font-semibold text-amber-500 transition hover:text-amber-400">
         ${mode === 'login' ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти'}
       </button>
+      ${mode === 'login' ? `<button id="auth-forgot" class="mt-1 w-full text-xs font-medium text-slate-500 transition hover:text-amber-500" style="margin-top:.35rem">Забыли пароль?</button>` : ''}
     </div>
   </section>`;
   document.querySelector('#auth-switch').onclick = () => renderAuth(mode === 'login' ? 'register' : 'login');
+  const forgot = document.querySelector('#auth-forgot');
+  if (forgot) forgot.onclick = showResetPasswordModal;
   document.querySelector('#auth-form').onsubmit = async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -456,34 +493,75 @@ function showRenameRigModal(rig) {
 function showRigConfigModal(rig) {
   if (!rig) return;
   if (!state.coins.length) return toast('Сначала добавьте хотя бы одну монету в настройках', 'error');
-  const coinOptions = state.coins.map((coin) => `<option value="${escapeHtml(coin.name)}" ${coin.name.toLowerCase() === String(rig.coin || '').toLowerCase() ? 'selected' : ''}>${escapeHtml(coin.name)} · ${money(coin.price_usd)}</option>`).join('');
-  modal(`Конфигурация: ${rig.name}`, `<form data-rig-config="${rig.id}" class="space-y-4">
+  const node = modal(`Конфигурация: ${rig.name}`, `<form data-rig-config="${rig.id}" class="space-y-4">
     <label class="block text-sm font-semibold">Монета
-      <select name="coin" required class="field">${coinOptions}</select>
+      ${dropdownHtml('coin', state.coins.map((coin) => ({ value: coin.name, label: `${escapeHtml(coin.name)} · ${money(coin.price_usd)}` })), rig.coin)}
     </label>
-    <label class="block text-sm font-semibold">Добыча монет в сутки, весь риг
-      <input name="coin_per_day" type="number" min="0" step="any" required value="${rig.coin_per_day ?? 0}" class="field">
-    </label>
-    <label class="block text-sm font-semibold">Цена за розетку, $ за кВт·ч
-      <input name="electricity_cost" type="number" min="0" step="0.001" required value="${rig.electricity_cost ?? 0}" class="field">
-    </label>
-    <div class="glass rounded-2xl p-3.5">
-      <p class="mb-3 flex items-center gap-2 text-sm font-bold">${ico('flash')} Время</p>
-      <div class="grid grid-cols-2 gap-2.5">
-        <label class="text-xs font-bold text-slate-500">Рабочих суток в цикле · 18ч<input name="working_days" type="number" min="0" max="31" step="1" required value="${rig.working_days ?? 5}" class="field"></label>
-        <label class="text-xs font-bold text-slate-500">Выходных суток в цикле · 24ч<input name="weekend_days" type="number" min="0" max="31" step="1" required value="${rig.weekend_days ?? 2}" class="field"></label>
-      </div>
-      <label class="mt-2.5 block text-xs font-bold text-slate-500">Введённая добыча в сутки основана на
-        <select name="calculation_mode" required class="field">
-          <option value="working_days" ${rig.calculation_mode !== 'weekend_days' ? 'selected' : ''}>Рабочих сутках (18ч)</option>
-          <option value="weekend_days" ${rig.calculation_mode === 'weekend_days' ? 'selected' : ''}>Выходных сутках (24ч)</option>
-        </select>
+    <div class="grid grid-cols-2 gap-3">
+      <label class="block text-sm font-semibold">Добыча в сутки, риг
+        <input name="coin_per_day" type="number" min="0" step="any" required value="${rig.coin_per_day ?? 0}" class="field">
+      </label>
+      <label class="block text-sm font-semibold">Розетка, $/кВт·ч
+        <input name="electricity_cost" type="number" min="0" step="0.001" required value="${rig.electricity_cost ?? 0}" class="field">
       </label>
     </div>
-    <p class="rounded-xl p-3 text-xs text-slate-500 glass">Средняя добыча в сутки считается автоматически по графику работы рига, а доход на 1 MH/s — от неё ÷ суммарный хешрейт всех карт этого рига. Значения в код не зашиты.</p>
+    <div class="glass rounded-2xl p-3">
+      <p class="mb-2.5 flex items-center gap-2 text-sm font-bold">${ico('flash')} Время</p>
+      <div class="grid grid-cols-2 gap-2.5">
+        <label class="text-xs font-bold text-slate-500">Рабочих суток · 18ч<input name="working_days" type="number" min="0" max="31" step="1" required value="${rig.working_days ?? 5}" class="field"></label>
+        <label class="text-xs font-bold text-slate-500">Выходных суток · 24ч<input name="weekend_days" type="number" min="0" max="31" step="1" required value="${rig.weekend_days ?? 2}" class="field"></label>
+      </div>
+      <label class="mt-2.5 block text-xs font-bold text-slate-500">Добыча в сутки основана на
+        ${dropdownHtml('calculation_mode', [{ value: 'working_days', label: 'Рабочих сутках (18ч)' }, { value: 'weekend_days', label: 'Выходных сутках (24ч)' }], rig.calculation_mode)}
+      </label>
+    </div>
+    <details class="glass rounded-xl p-3 text-xs text-slate-500">
+      <summary class="cursor-pointer font-semibold">Как считается доход</summary>
+      <p class="mt-2">Средняя добыча в сутки считается автоматически по графику работы рига, а доход на 1 MH/s — от неё ÷ суммарный хешрейт всех карт этого рига. Значения в код не зашиты.</p>
+    </details>
     <button class="btn btn-accent w-full">Сохранить конфигурацию</button>
   </form>`);
+  initDropdowns(node);
   // Отправку формы полностью обрабатывает глобальный оптимистичный listener (см. ниже).
+}
+
+function showResetPasswordModal() {
+  const node = modal('Сброс пароля', `
+    <p class="mb-4 text-sm text-slate-500 dark:text-slate-400">Укажите логин — сервер сгенерирует новый временный пароль. Показываем один раз; сохраните его сразу.</p>
+    <form id="reset-form" class="space-y-4">
+      <label class="block text-sm font-semibold">Логин
+        <input name="username" required minlength="3" autocomplete="username" class="field" placeholder="miner_01">
+      </label>
+      <button class="btn btn-accent w-full">Сбросить пароль</button>
+    </form>
+    <div id="reset-result" class="hidden mt-4 space-y-3">
+      <div class="glass rounded-2xl p-4 text-center">
+        <p class="mb-1 text-xs font-bold uppercase tracking-wider text-slate-500">Новый пароль</p>
+        <p id="reset-new-pass" class="font-display text-lg font-extrabold text-amber-500 tracking-wide"></p>
+      </div>
+      <button id="reset-copy" class="btn btn-ghost w-full">${ico('check')} Скопировать пароль</button>
+      <p class="text-xs text-slate-500">Войдите с ним и сразу смените в «Настройки → Безопасность».</p>
+    </div>
+  `);
+  const form = node.querySelector('#reset-form');
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const username = String(new FormData(form).get('username') || '').trim();
+    const pack = node.querySelector('#reset-result');
+    const passEl = node.querySelector('#reset-new-pass');
+    try {
+      const res = await request('/auth/reset-password', { method: 'POST', body: JSON.stringify({ username }) });
+      passEl.textContent = res.password;
+      form.classList.add('hidden');
+      pack.classList.remove('hidden');
+      node.querySelector('#reset-copy').onclick = async () => {
+        try { await navigator.clipboard.writeText(res.password); toast('Пароль скопирован'); } catch { toast('Не скопировалось — выделите и скопируйте вручную', 'error'); }
+      };
+      toast('Пароль сброшен — проверьте и сохраните новый');
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  };
 }
 
 function showSettingsModal() {
@@ -498,18 +576,49 @@ function showSettingsModal() {
     <p class="mb-2 flex items-center gap-2 text-sm font-bold">${ico('coin')} Монеты</p>
     <p class="mb-4 text-sm text-slate-500">Курс в USD применяется сразу везде, где используется эта монета.</p>
     <div id="settings-coin-list" class="space-y-2.5"></div>
-    <form id="settings-new-coin" class="mt-4 grid grid-cols-2 gap-2.5 border-t border-white/5 pt-4">
+    <form id="settings-new-coin" class="mt-4 grid grid-cols-[1fr_1fr_auto] items-end gap-2 border-t border-white/5 pt-4">
       <label class="text-xs font-bold text-slate-500">Название<input name="name" required maxlength="30" placeholder="BTC" class="settings-field"></label>
       <label class="text-xs font-bold text-slate-500">Курс, $<input name="price_usd" type="number" required min="0" step="any" placeholder="0.00" class="settings-field"></label>
-      <button class="btn btn-accent col-span-2">${ico('plus')} Добавить монету</button>
-    </form>`);
+      <button class="btn btn-accent btn-icon" title="Добавить монету" aria-label="Добавить монету">${ico('plus')}</button>
+    </form>
+    <details class="glass mt-4 rounded-2xl p-3">
+      <summary class="flex cursor-pointer items-center gap-2 text-sm font-bold">${ico('gear')} Сменить пароль</summary>
+      <form id="settings-change-password" class="mt-3 space-y-2.5 border-t border-white/5 pt-3">
+        <input id="cp-current" name="current_password" type="password" required minlength="6" autocomplete="current-password" class="field" placeholder="Текущий пароль">
+        <input id="cp-next" name="new_password" type="password" required minlength="6" autocomplete="new-password" class="field" placeholder="Новый пароль (6+ символов)">
+        <button class="btn btn-accent w-full">Сменить пароль</button>
+        <p id="cp-error" class="hidden text-xs text-rose-400"></p>
+      </form>
+    </details>`);
+
+  // Тема
   node.querySelector('#settings-theme-toggle').onclick = () => {
-    // Тему переключаем без renderDashboard(): DOM дашборда за модалкой не пересоздаётся,
-    // поэтому смена dark-класса на <html> проходит плавным переходом (см. styles.css),
-    // а не мгновенной пересборкой всего экрана.
     state.theme = state.theme === 'dark' ? 'light' : 'dark';
     applyTheme();
     node.querySelector('#settings-theme-toggle').innerHTML = state.theme === 'dark' ? ico('sun') : ico('moon');
+  };
+
+  // Смена пароля
+  node.querySelector('#settings-change-password').onsubmit = async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const errorEl = form.querySelector('#cp-error');
+    const btn = form.querySelector('button');
+    errorEl.classList.add('hidden');
+    btn.disabled = true;
+    try {
+      await request('/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({
+          current_password: form.querySelector('#cp-current').value,
+          new_password: form.querySelector('#cp-next').value,
+        }),
+      });
+      form.reset(); toast('Пароль обновлён');
+    } catch (error) {
+      errorEl.textContent = error.message; errorEl.classList.remove('hidden');
+    }
+    btn.disabled = false;
   };
   const coinPanel = node.querySelector('#settings-coin-list');
   const renderCoins = () => {

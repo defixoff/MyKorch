@@ -162,11 +162,20 @@ html:not(.dark) .aurora::after { content: ''; position: absolute; inset: 0; back
   border: 1px solid var(--glass-border);
   background: var(--field-bg);
   outline: none;
+  font-size: 16px; /* против zoom на iOS при фокусе (min 16px) */
   transition: box-shadow .2s ease, border-color .2s ease, background-color .2s;
 }
 .field:focus, .settings-field:focus {
   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+/* На мобиле плотнее: та же форма, меньше паддинг/межстрочий */
+@media (max-width: 639px) {
+  .field, .settings-field { min-height: 48px; margin-top: .25rem; padding: .55rem .8rem; }
+  .glass.rounded-2xl.p-3 { padding: .85rem; }
+  #settings-new-coin { gap: .5rem; }
+}
 }
 input[type=number] { font-variant-numeric: tabular-nums; }
 
@@ -185,7 +194,6 @@ input[type=number] { font-variant-numeric: tabular-nums; }
 }
 .stat-card .stat-label .ico { width: .95em; height: .95em; color: var(--accent); }
 .stat-main .stat-label { color: #fdba74; }
-.stat-main .stat-label .ico { color: #fdba74; }
 .stat-value {
   display: block; margin-top: .35rem;
   font-family: var(--font-display); font-weight: 800;
@@ -200,12 +208,17 @@ input[type=number] { font-variant-numeric: tabular-nums; }
 /* Цифра профита — в цветовом акценте, хорошо видна на любом стекле */
 .stat-main .stat-value { color: #fbbf24; text-shadow: 0 0 24px rgba(251, 191, 36, .35); }
 .stat-main.negative .stat-value { color: var(--bad); text-shadow: 0 0 24px rgba(251, 113, 133, .32); }
-.stat-main { background: var(--glass-bg); border-color: color-mix(in srgb, var(--accent) 22%, var(--glass-border)); }
+.stat-main {
+  /* Убираем янтарную заливку всего фона, теперь это тёмное стекло с топ-полосой */
+  background: var(--glass-bg);
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--glass-border));
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-hi), 0 0 32px rgba(249, 115, 22, .12);
+}
+/* Тёплое свечение только в углу (не мешает цифре) */
 .stat-main::after {
-  /* Тёплое пятно в углу, не мешая читабельности цифры */
-  content: ''; position: absolute; top: -46px; right: -30px; width: 160px; height: 160px;
-  border-radius: 50%; filter: blur(48px);
-  background: radial-gradient(circle, rgba(249, 115, 22, .34), transparent 68%);
+  content: ''; position: absolute; top: -52px; right: -24px; width: 180px; height: 180px;
+  border-radius: 50%; filter: blur(52px);
+  background: radial-gradient(circle, rgba(249, 115, 22, .34), transparent 70%);
   pointer-events: none;
 }
 /* Светлая тема — цифра глубже янтаря, чтобы не пропадала */
@@ -308,8 +321,10 @@ html:not(.dark) .stat-main .stat-label .ico { color: #d97706; }
 @media (max-width: 639px) {
   .modal-panel { padding-bottom: calc(1.25rem + env(safe-area-inset-bottom)); border-radius: 22px 22px 16px 16px; }
   /* Липкий низ: кнопка «Сохранить» остаётся доступной, когда форма длинная */
-  .modal-panel form { display: flex; flex-direction: column; max-height: calc(96dvh - 8rem); overflow-y: auto; -webkit-overflow-scrolling: touch; }
-  .modal-panel form > .btn-accent { position: sticky; bottom: 0; z-index: 2; padding-block: .9rem; margin-top: 1rem; box-shadow: 0 -14px 28px var(--glass-bg-strong); }
+  .modal-panel form { display: flex; flex-direction: column; max-height: calc(96dvh - 6.5rem); overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .modal-panel form > .btn-accent { position: sticky; bottom: 0; z-index: 2; padding-block: .95rem; margin-top: .85rem; box-shadow: 0 -14px 28px var(--glass-bg-strong); }
+  /* Уберём лишнее пространство */
+  .modal-panel form .glass.rounded-2xl { padding: .85rem; }
 }
 .modal-backdrop.closing { animation: fade-out .18s ease-in forwards; }
 .modal-backdrop.closing .modal-panel { animation: sheet-out .2s cubic-bezier(.5, 0, .75, 0) forwards; }
@@ -347,6 +362,36 @@ html:not(.dark) .stat-main .stat-label .ico { color: #d97706; }
 .toast.toast-out { animation: toast-out .22s ease-in forwards; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(-14px) scale(.92); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes toast-out { to { opacity: 0; transform: scale(.94); } }
+
+/* --- Кастомный dropdown (стеклянный, вместо native select) ---------------- */
+/* native select в тёмной теме даёт системный нечитаемый попап. */
+.dd { position: relative; margin-top: .35rem; }
+.dd-btn { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: .5rem; text-align: left; cursor: pointer; }
+.dd-caret { transition: transform .22s var(--ease-spring-soft); opacity: .6; }
+.dd.open .dd-caret { transform: rotate(180deg); }
+.dd-list {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 30;
+  max-height: 240px; overflow-y: auto;
+  padding: .35rem; margin: 0; list-style: none;
+  border-radius: 14px;
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(22px) saturate(1.6);
+  backdrop-filter: blur(22px) saturate(1.6);
+  border: 1px solid var(--glass-border);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, .45), inset 0 1px 0 var(--glass-hi);
+  opacity: 0; transform: translateY(-6px) scale(.98); transform-origin: top center;
+  pointer-events: none;
+  transition: opacity .18s ease, transform .22s var(--ease-spring-soft);
+}
+.dd.open .dd-list { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }
+.dd-item {
+  width: 100%; text-align: left;
+  padding: .55rem .75rem; border-radius: 9px;
+  font-size: .875rem; font-weight: 600;
+  transition: background-color .15s ease;
+}
+.dd-item:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.dd-item.selected { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); }
 
 /* --- Скелетон ------------------------------------------------------------- */
 .skeleton { position: relative; overflow: hidden; background: var(--track); border-radius: 14px; }
