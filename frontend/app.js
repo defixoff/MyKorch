@@ -118,6 +118,7 @@ function rigCalculation(rig, cards) {
   return { totalHashrate, totalPower, dailyYield, incomePerMhs, grossIncome, electricityExpense, profit: grossIncome - electricityExpense };
 }
 
+const AUTH_ENDPOINTS = new Set(['/auth/login', '/auth/register', '/auth/reset-password', '/auth/change-password']);
 async function request(path, options = {}) {
   const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
@@ -128,8 +129,10 @@ async function request(path, options = {}) {
     throw new Error(`Не удалось подключиться к API (${API}). Проверьте адрес, порт и запуск сервера с host 0.0.0.0.`);
   }
   if (response.status === 401) {
-    logout(false);
-    throw new Error('Сессия истекла. Войдите снова.');
+    // НЕЛЬЗЯ logout(false) на auth-эндпоинтах: там 401 — это "неверный пароль", не истёкшая сессия.
+    if (!AUTH_ENDPOINTS.has(path)) { logout(false); throw new Error('Сессия истекла. Войдите снова.'); }
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(typeof payload.detail === 'string' ? payload.detail : 'Неверные данные');
   }
   if (response.status === 204) return null;
   const payload = await response.json().catch(() => ({}));
@@ -233,8 +236,8 @@ function renderSkeleton() {
       <div class="flex gap-2 sm:gap-3"><div class="skeleton h-11 w-28"></div><div class="skeleton h-11 w-24"></div></div>
     </header>
     <section class="grid gap-3 sm:gap-4 sm:grid-cols-2">
-      <div class="skeleton h-32" style="border-radius:22px"></div>
-      <div class="skeleton h-32" style="border-radius:22px"></div>
+      <div class="skeleton h-32 card-glass"></div>
+      <div class="skeleton h-32 card-glass"></div>
     </section>
     <section class="mt-7 sm:mt-8">
       <div class="skeleton mb-3 h-5 w-16"></div>
@@ -268,7 +271,7 @@ function renderAuth(mode = 'login') {
       <button id="auth-switch" class="mt-5 w-full text-sm font-semibold text-amber-500 transition hover:text-amber-400">
         ${mode === 'login' ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти'}
       </button>
-      ${mode === 'login' ? `<button id="auth-forgot" class="mt-1 w-full text-xs font-medium text-slate-500 transition hover:text-amber-500" style="margin-top:.35rem">Забыли пароль?</button>` : ''}
+      ${mode === 'login' ? `<button id="auth-forgot" class="mt-1 w-full text-xs font-medium text-slate-500 transition hover:text-amber-500">Забыли пароль?</button>` : ''}
     </div>
   </section>`;
   document.querySelector('#auth-switch').onclick = () => renderAuth(mode === 'login' ? 'register' : 'login');
