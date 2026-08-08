@@ -61,16 +61,17 @@ const number = (value, digits = 2) => new Intl.NumberFormat('ru-RU', { maximumFr
 /* Иконки: ico('gear') → <svg><use #i-gear></svg>. Спрайт объявлен в index.html. */
 const ico = (name, extra = '') => `<svg class="ico ${extra}" aria-hidden="true"><use href="#i-${name}"></use></svg>`;
 
-/* Кастомный glass-dropdown: native <select> в тёмной теме показывает нечитаемый
-   системный попап (его нельзя стилизовать). Значение живёт в скрытом input[name],
-   поэтому FormData и существующий submit-handler ничего не замечают. */
+/* Кастомный glass-dropdown: значение живёт в скрытом input[name] — FormData
+   и существующий submit-handler ничего не замечают. Список раскрывается INLINE
+   под кнопкой (аккордеон): модалка с overflow/backdrop-filter его не обрезает.
+   Никакого fixed-позиционирования и JS-геометрии. */
 function dropdownHtml(name, options, current) {
   const norm = (v) => String(v || '').toLowerCase();
   const cur = options.find((o) => norm(o.value) === norm(current)) || options[0];
   return `<div class="dd" data-dd>
     <input type="hidden" name="${name}" value="${escapeHtml(cur?.value ?? '')}">
-    <button type="button" class="dd-btn field" aria-haspopup="listbox">${escapeHtml(cur?.label ?? '')}${ico('chevron', 'dd-caret')}</button>
-    <ul class="dd-list" role="listbox">${options.map((o) => `<li><button type="button" class="dd-item ${o === cur ? 'selected' : ''}" data-value="${escapeHtml(o.value)}">${o.label}</button></li>`).join('')}</ul>
+    <button type="button" class="dd-btn field" aria-haspopup="listbox" aria-expanded="false">${escapeHtml(cur?.label ?? '')}${ico('chevron', 'dd-caret')}</button>
+    <ul class="dd-list" role="listbox">${options.map((o) => `<li><button type="button" class="dd-item ${o.value === cur?.value ? 'selected' : ''}" data-value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</button></li>`).join('')}</ul>
   </div>`;
 }
 
@@ -78,31 +79,15 @@ function initDropdowns(root) {
   root.querySelectorAll('[data-dd]').forEach((dd) => {
     const input = dd.querySelector('input');
     const btn = dd.querySelector('.dd-btn');
-    const list = dd.querySelector('.dd-list');
-    const open = () => {
-      // Позиционируем список по кнопке во viewport — модалка c overflow-y:auto/bakdrop-filter
-      // не сможет его обрезать (fixed = viewport containing block).
-      const rect = btn.getBoundingClientRect();
-      const gap = 6;
-      const availableBelow = window.innerHeight - rect.bottom - gap;
-      list.style.left = `${rect.left}px`;
-      list.style.width = `${rect.width}px`;
-      if (availableBelow < 120) {
-        // Нет места под кнопкой — раскрываем вверх.
-        list.classList.add('dd-dropup');
-        list.style.top = 'auto';
-        list.style.bottom = `${window.innerHeight - rect.top + gap}px`;
-      } else {
-        list.classList.remove('dd-dropup');
-        list.style.bottom = 'auto';
-        list.style.top = `${rect.bottom + gap}px`;
-      }
-      dd.classList.add('open');
-    };
     btn.onclick = () => {
       const wasOpen = dd.classList.contains('open');
       closeAllDropdowns();
-      if (!wasOpen) open();
+      if (!wasOpen) {
+        dd.classList.add('open');
+        btn.setAttribute('aria-expanded', 'true');
+        // Чтобы раскрытый список не уехал за низ панели — подскроллим его в видимость.
+        requestAnimationFrame(() => dd.querySelector('.dd-list').scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+      }
     };
     dd.querySelectorAll('.dd-item').forEach((item) => item.onclick = () => {
       input.value = item.dataset.value;
@@ -113,7 +98,10 @@ function initDropdowns(root) {
   });
 }
 function closeAllDropdowns() {
-  document.querySelectorAll('.dd.open').forEach((d) => d.classList.remove('open', 'dd-dropup'));
+  document.querySelectorAll('.dd.open').forEach((d) => {
+    d.classList.remove('open');
+    d.querySelector('.dd-btn')?.setAttribute('aria-expanded', 'false');
+  });
 }
 
 document.addEventListener('click', (event) => {

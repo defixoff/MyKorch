@@ -365,39 +365,27 @@ html:not(.dark) .stat-main .stat-label .ico { color: #d97706; }
 
 /* --- Кастомный dropdown (стеклянный, вместо native select) ---------------- */
 /* native select в тёмной теме даёт системный нечитаемый попап.
-   ВАЖНО: модалка имеет overflow-y:auto + backdrop-filter → .dd-list НИКОГДА
-   не позиционируется внутри модалки (clip). Поэтому:
-   - десктоп: app.js ставит .dd-list в position:fixed поверх всего (z-index 60);
-   - мобайл: .dd-list раскрывается inline и расталкивает контент, панель
-     скроллится сама (удобно на телефоне, кнопка Сохранить не перекрывается). */
+   Список раскрывается INLINE прямо под кнопкой (аккордеон в потоке формы):
+   никакого fixed/absolute-позиционирования → модалка его не обрезает,
+   скроллится вместе с формой, кнопка «Сохранить» остаётся ниже. */
 .dd { position: relative; margin-top: .35rem; }
 .dd-btn { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: .5rem; text-align: left; cursor: pointer; }
 .dd-caret { transition: transform .22s var(--ease-spring-soft); opacity: .6; }
 .dd.open .dd-caret { transform: rotate(180deg); }
+.dd-btn { border-color: var(--glass-border); }
+.dd.open .dd-btn { border-color: color-mix(in srgb, var(--accent) 45%, var(--glass-border)); }
 .dd-list {
+  display: none;
   margin: .35rem 0 0; padding: .35rem; list-style: none;
+  max-height: 220px; overflow-y: auto;
   border-radius: 14px;
   background: var(--glass-bg-strong);
   -webkit-backdrop-filter: blur(22px) saturate(1.6);
   backdrop-filter: blur(22px) saturate(1.6);
   border: 1px solid var(--glass-border);
-  box-shadow: 0 16px 44px rgba(0, 0, 0, .45), inset 0 1px 0 var(--glass-hi);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .35), inset 0 1px 0 var(--glass-hi);
 }
-/* мобайл: inline-аккордеон */
-@media (max-width: 639px) {
-  .dd-list { display: none; }
-  .dd.open .dd-list { display: block; animation: rise-in .22s var(--ease-spring-soft); }
-}
-/* десктоп: fixed, координаты/ширину задаёт JS */
-@media (min-width: 640px) {
-  .dd-list {
-    position: fixed; z-index: 60; max-height: min(300px, 40vh); overflow-y: auto;
-    opacity: 0; transform: translateY(-6px) scale(.98); transform-origin: top center;
-    pointer-events: none;
-    transition: opacity .18s ease, transform .22s var(--ease-spring-soft);
-  }
-  .dd.open .dd-list { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }
-}
+.dd.open .dd-list { display: block; animation: rise-in .22s var(--ease-spring-soft); }
 .dd-item {
   width: 100%; text-align: left;
   padding: .55rem .75rem; border-radius: 9px; border: none; background: none;
