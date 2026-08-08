@@ -77,22 +77,50 @@ function dropdownHtml(name, options, current) {
 function initDropdowns(root) {
   root.querySelectorAll('[data-dd]').forEach((dd) => {
     const input = dd.querySelector('input');
-    dd.querySelector('.dd-btn').onclick = () => {
+    const btn = dd.querySelector('.dd-btn');
+    const list = dd.querySelector('.dd-list');
+    const open = () => {
+      // Позиционируем список по кнопке во viewport — модалка c overflow-y:auto/bakdrop-filter
+      // не сможет его обрезать (fixed = viewport containing block).
+      const rect = btn.getBoundingClientRect();
+      const gap = 6;
+      const availableBelow = window.innerHeight - rect.bottom - gap;
+      list.style.left = `${rect.left}px`;
+      list.style.width = `${rect.width}px`;
+      if (availableBelow < 120) {
+        // Нет места под кнопкой — раскрываем вверх.
+        list.classList.add('dd-dropup');
+        list.style.top = 'auto';
+        list.style.bottom = `${window.innerHeight - rect.top + gap}px`;
+      } else {
+        list.classList.remove('dd-dropup');
+        list.style.bottom = 'auto';
+        list.style.top = `${rect.bottom + gap}px`;
+      }
+      dd.classList.add('open');
+    };
+    btn.onclick = () => {
       const wasOpen = dd.classList.contains('open');
-      document.querySelectorAll('.dd.open').forEach((d) => d.classList.remove('open'));
-      dd.classList.toggle('open', !wasOpen);
+      closeAllDropdowns();
+      if (!wasOpen) open();
     };
     dd.querySelectorAll('.dd-item').forEach((item) => item.onclick = () => {
       input.value = item.dataset.value;
-      dd.querySelector('.dd-btn').firstChild.textContent = item.textContent;
+      btn.firstChild.textContent = item.textContent;
       dd.querySelectorAll('.dd-item').forEach((i) => i.classList.toggle('selected', i === item));
-      dd.classList.remove('open');
+      closeAllDropdowns();
     });
   });
 }
-// Клик мимо любого открытого дропдауна — закрыть.
+function closeAllDropdowns() {
+  document.querySelectorAll('.dd.open').forEach((d) => d.classList.remove('open', 'dd-dropup'));
+}
+
 document.addEventListener('click', (event) => {
-  if (!event.target.closest('[data-dd]')) document.querySelectorAll('.dd.open').forEach((d) => d.classList.remove('open'));
+  if (!event.target.closest('[data-dd]')) closeAllDropdowns();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeAllDropdowns();
 });
 
 // Кэш последнего известного состояния — чтобы при следующем открытии сайта интерфейс

@@ -625,6 +625,10 @@ app.mount("/assets", StaticFiles(directory=FRONTEND_DIR), name="assets")
 def font_file(file_name: str) -> FileResponse:
     """Кастомные шрифты лежат в frontend/fonts — чтобы они грузились и с локального
     FastAPI, и с Vercel (там frontend/ — корень статики)."""
+    # Безопасность: блокируем path traversal вида /fonts/../../backend/main.py.
+    safe_name = Path(file_name).name
+    if safe_name != file_name:
+        raise HTTPException(status_code=404, detail="Файл не найден")
     if not file_name.endswith((".ttf", ".woff2", ".otf")):
         raise HTTPException(status_code=404, detail="Файл не найден")
     path = FRONTEND_DIR / "fonts" / file_name
