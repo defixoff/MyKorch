@@ -1,4 +1,4 @@
-const CACHE_NAME = 'moy-korch-v20';
+const CACHE_NAME = 'moy-korch-v21';
 const STATIC_FILES = ['/index.html', '/app.js', '/styles.css', '/manifest.json', '/icon.svg', '/fonts/unbounded.ttf'];
 
 self.addEventListener('install', (event) => {
