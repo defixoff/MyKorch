@@ -1,48 +1,63 @@
 /* =========================================================================
-   Мой корч — Aurora Glass (редизайн)
-   Liquid glass + тёплая аврора + spring-анимации. Тёмная — витрина.
+   Мой корч — NextGen Aurora Glass
+   Liquid glass, тёплая неоновая аврора, частицы и богатые spring-анимации.
    ========================================================================= */
+
+@font-face {
+  font-family: 'Unbounded';
+  src: url('/fonts/unbounded.ttf') format('truetype');
+  font-weight: 300 900;
+  font-style: normal;
+  font-display: swap;
+}
 
 :root {
   --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-display: 'Unbounded', var(--font-sans);
   --ease-spring: cubic-bezier(.34, 1.4, .44, 1);
   --ease-spring-soft: cubic-bezier(.22, .9, .3, 1.08);
-  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --ease-spring-bounce: cubic-bezier(.34, 1.56, .64, 1);
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
 
   /* Тёплый акцент: янтарь → оранж */
   --accent: #fbbf24;
   --accent-2: #f97316;
-  --accent-ink: #3b2103;                  /* текст поверх янтаря */
+  --accent-ink: #3b2103;
   --accent-grad: linear-gradient(135deg, #fbbf24 0%, #f59e0b 55%, #f97316 100%);
   --good: #34d399;
+  --good-ink: #064e3b;
+  --good-grad: linear-gradient(135deg, #34d399 0%, #10b981 100%);
   --bad: #fb7185;
+  --bad-ink: #4c0519;
+  --bad-grad: linear-gradient(135deg, #fb7185 0%, #f43f5e 100%);
 
-  /* Светлая тема (молочный мороз) */
-  --bg: #eef1f8;
+  /* Светлая тема */
+  --bg: #eef2f8;
   --ink: #0f172a;
   --muted: #64748b;
-  --glass-bg: rgba(255, 255, 255, .62);
-  --glass-bg-strong: rgba(255, 255, 255, .78);
+  --glass-bg: rgba(255, 255, 255, .66);
+  --glass-bg-strong: rgba(255, 255, 255, .84);
   --glass-border: rgba(15, 23, 42, .08);
-  --glass-hi: rgba(255, 255, 255, .9);    /* внутренний блик */
-  --glass-shadow: 0 8px 30px rgba(15, 23, 42, .09);
-  --field-bg: rgba(255, 255, 255, .55);
+  --glass-hi: rgba(255, 255, 255, .95);
+  --glass-shadow: 0 12px 36px rgba(15, 23, 42, .08);
+  --field-bg: rgba(255, 255, 255, .65);
   --track: rgba(15, 23, 42, .05);
+  --card-sub: rgba(15, 23, 42, .03);
   color-scheme: light;
 }
 
 html.dark {
-  --bg: #05070d;
+  --bg: #05070e;
   --ink: #eef2ff;
   --muted: #94a3b8;
-  --glass-bg: rgba(13, 17, 26, .55);
-  --glass-bg-strong: rgba(13, 17, 26, .72);
-  --glass-border: rgba(255, 255, 255, .09);
-  --glass-hi: rgba(255, 255, 255, .12);
-  --glass-shadow: 0 18px 50px rgba(0, 0, 0, .55);
-  --field-bg: rgba(255, 255, 255, .04);
-  --track: rgba(255, 255, 255, .05);
+  --glass-bg: rgba(13, 17, 27, .60);
+  --glass-bg-strong: rgba(15, 21, 34, .78);
+  --glass-border: rgba(255, 255, 255, .095);
+  --glass-hi: rgba(255, 255, 255, .14);
+  --glass-shadow: 0 20px 55px rgba(0, 0, 0, .58);
+  --field-bg: rgba(255, 255, 255, .045);
+  --track: rgba(255, 255, 255, .055);
+  --card-sub: rgba(255, 255, 255, .03);
   color-scheme: dark;
 }
 
@@ -54,193 +69,301 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow-x: hidden;
+  min-height: 100vh;
 }
 button, input, select { font: inherit; color: inherit; }
 button { -webkit-tap-highlight-color: transparent; cursor: pointer; }
 button:disabled { opacity: .55; cursor: not-allowed; }
 
-h1, .font-display { font-family: var(--font-display); letter-spacing: -.02em; }
+h1, h2, h3, .font-display { font-family: var(--font-display); letter-spacing: -.025em; }
 .num { font-variant-numeric: tabular-nums lining-nums; }
 
-:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 75%, transparent); outline-offset: 2px; border-radius: 8px; }
+:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 75%, transparent); outline-offset: 2px; border-radius: 10px; }
 
 ::selection { background: color-mix(in srgb, var(--accent) 40%, transparent); }
 
-/* --- Аврора-фон --------------------------------------------------------- */
+/* --- Аврора-фон с холстом частиц ---------------------------------------- */
 .aurora { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+.aurora-canvas {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  pointer-events: none; z-index: 1; opacity: .85;
+}
+.confetti-canvas {
+  position: fixed; inset: 0; width: 100vw; height: 100vh;
+  pointer-events: none; z-index: 100;
+}
 .dark .aurora {
   background:
-    radial-gradient(1200px 800px at 85% -10%, rgba(249, 115, 22, .14), transparent 60%),
-    radial-gradient(900px 700px at -10% 110%, rgba(251, 191, 36, .10), transparent 60%),
-    #05070d;
+    radial-gradient(1300px 900px at 85% -10%, rgba(249, 115, 22, .15), transparent 62%),
+    radial-gradient(1000px 800px at -10% 110%, rgba(251, 191, 36, .11), transparent 62%),
+    #05070e;
 }
 .aurora-blob {
   position: absolute; border-radius: 50%;
-  filter: blur(90px);
+  filter: blur(100px);
   will-change: transform;
   transform: translateZ(0);
 }
-.aurora-blob--1 { width: 44vw; height: 44vw; left: -12vw; top: -14vw;
-  background: radial-gradient(circle at 35% 35%, rgba(251, 146, 60, .34), transparent 62%);
-  animation: drift-a 46s ease-in-out infinite alternate; }
-.aurora-blob--2 { width: 40vw; height: 40vw; right: -14vw; top: 8vh;
-  background: radial-gradient(circle at 60% 40%, rgba(234, 88, 12, .30), transparent 62%);
-  animation: drift-b 58s ease-in-out infinite alternate; }
-.aurora-blob--3 { width: 38vw; height: 38vw; left: 18vw; bottom: -18vw;
-  background: radial-gradient(circle at 50% 50%, rgba(251, 191, 36, .22), transparent 64%);
-  animation: drift-c 52s ease-in-out infinite alternate; }
-.aurora-grain { display: none; }
-/* Светлая тема: белая вуаль приглушает аврору, зерно — мягкое умножение.
-   html.light, а не :not(.dark) — иначе :not матчится на КАЖДЫЙ элемент без .dark
-   (включая body/div), и вуаль/яркость применялись бы даже в тёмной теме. */
-html:not(.dark) .aurora::after { content: ''; position: absolute; inset: 0; background: rgba(238, 241, 248, .68); }
+.aurora-blob--1 { width: 48vw; height: 48vw; left: -14vw; top: -16vw;
+  background: radial-gradient(circle at 35% 35%, rgba(251, 146, 60, .32), transparent 62%);
+  animation: drift-a 42s ease-in-out infinite alternate; }
+.aurora-blob--2 { width: 44vw; height: 44vw; right: -16vw; top: 12vh;
+  background: radial-gradient(circle at 60% 40%, rgba(234, 88, 12, .26), transparent 62%);
+  animation: drift-b 54s ease-in-out infinite alternate; }
+.aurora-blob--3 { width: 42vw; height: 42vw; left: 22vw; bottom: -20vw;
+  background: radial-gradient(circle at 50% 50%, rgba(251, 191, 36, .20), transparent 64%);
+  animation: drift-c 48s ease-in-out infinite alternate; }
 
-@keyframes drift-a { to { transform: translate(10vw, 9vh) scale(1.18); } }
-@keyframes drift-b { to { transform: translate(-9vw, 12vh) scale(1.12); } }
-@keyframes drift-c { to { transform: translate(7vw, -8vh) scale(1.22); } }
+html:not(.dark) .aurora::after {
+  content: ''; position: absolute; inset: 0;
+  background: rgba(238, 242, 248, .74);
+}
 
-/* --- Liquid glass -------------------------------------------------------- */
+@keyframes drift-a { to { transform: translate(12vw, 10vh) scale(1.15); } }
+@keyframes drift-b { to { transform: translate(-10vw, 14vh) scale(1.1); } }
+@keyframes drift-c { to { transform: translate(8vw, -10vh) scale(1.2); } }
+
+/* --- Liquid Glass -------------------------------------------------------- */
 .glass {
   position: relative;
   background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(20px) saturate(1.5);
-  backdrop-filter: blur(20px) saturate(1.5);
+  -webkit-backdrop-filter: blur(24px) saturate(1.55);
+  backdrop-filter: blur(24px) saturate(1.55);
   border: 1px solid var(--glass-border);
   box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-hi);
 }
 .card-glass {
   position: relative;
   background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(20px) saturate(1.5);
-  backdrop-filter: blur(20px) saturate(1.5);
+  -webkit-backdrop-filter: blur(24px) saturate(1.55);
+  backdrop-filter: blur(24px) saturate(1.55);
   border: 1px solid var(--glass-border);
-  border-radius: 22px;
+  border-radius: 24px;
   box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-hi);
-  transition: transform .25s var(--ease-spring-soft), box-shadow .3s ease, border-color .25s ease;
+  transition: transform .26s var(--ease-spring-soft), box-shadow .32s ease, border-color .26s ease;
 }
-/* Pointer-glow: --mx/--my проставляет app.js; блик «стекла» по курсору */
 .card-glass::after {
   content: ''; position: absolute; inset: 0; border-radius: inherit;
-  background: radial-gradient(280px circle at var(--mx, -500px) var(--my, -500px), rgba(253, 186, 60, .14), transparent 65%);
+  background: radial-gradient(320px circle at var(--mx, -500px) var(--my, -500px), rgba(253, 186, 60, .15), transparent 65%);
   opacity: 0; transition: opacity .35s ease; pointer-events: none;
 }
 @media (hover: hover) {
-  .card-glass:hover { transform: translateY(-3px); border-color: color-mix(in srgb, var(--accent) 28%, var(--glass-border)); }
+  .card-glass:hover {
+    transform: translateY(-3px);
+    border-color: color-mix(in srgb, var(--accent) 32%, var(--glass-border));
+    box-shadow: 0 18px 45px rgba(0, 0, 0, .32), inset 0 1px 0 var(--glass-hi);
+  }
   .card-glass:hover::after { opacity: 1; }
 }
 
-/* Кнопки */
+/* --- Кнопки --------------------------------------------------------------- */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
-  min-height: 44px; padding: .55rem 1rem;
+  min-height: 44px; padding: .55rem 1.1rem;
   border-radius: 14px; font-weight: 700; font-size: .875rem;
   border: 1px solid var(--glass-border);
   background: var(--field-bg);
-  transition: transform .18s var(--ease-spring-soft), box-shadow .25s ease, background-color .25s ease, border-color .25s ease, color .2s;
+  transition: transform .18s var(--ease-spring-soft), box-shadow .24s ease, background-color .22s ease, border-color .22s ease, color .18s;
+  will-change: transform;
 }
 .btn:not(:disabled):hover { transform: translateY(-1.5px); }
-.btn:not(:disabled):active { transform: translateY(0) scale(.97); }
-.btn-ghost:hover { background: var(--track); border-color: color-mix(in srgb, var(--accent) 22%, var(--glass-border)); }
+.btn:not(:disabled):active { transform: translateY(0) scale(.96); }
+.btn-ghost:hover { background: var(--track); border-color: color-mix(in srgb, var(--accent) 26%, var(--glass-border)); }
 
 .btn-accent {
   background: var(--accent-grad); color: var(--accent-ink); border: none;
-  box-shadow: 0 6px 22px rgba(249, 115, 22, .38), inset 0 1px 0 rgba(255, 255, 255, .45);
+  box-shadow: 0 6px 24px rgba(249, 115, 22, .38), inset 0 1px 0 rgba(255, 255, 255, .45);
 }
-.btn-accent:not(:disabled):hover { transform: translateY(-2px); box-shadow: 0 10px 30px rgba(249, 115, 22, .5), inset 0 1px 0 rgba(255, 255, 255, .5); }
+.btn-accent:not(:disabled):hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 32px rgba(249, 115, 22, .52), inset 0 1px 0 rgba(255, 255, 255, .55);
+}
 .btn-icon { padding: .55rem; min-width: 44px; aspect-ratio: 1; }
 .btn.danger { color: var(--bad); }
-.btn.danger:hover { background: color-mix(in srgb, var(--bad) 12%, transparent); border-color: color-mix(in srgb, var(--bad) 30%, transparent); }
+.btn.danger:hover { background: color-mix(in srgb, var(--bad) 14%, transparent); border-color: color-mix(in srgb, var(--bad) 35%, transparent); }
 
 .ico { width: 1.15em; height: 1.15em; flex: none; display: inline-block; vertical-align: -0.2em; }
-.ico-lg { width: 1.9rem; height: 1.9rem; }
+.ico-lg { width: 1.95rem; height: 1.95rem; }
 
-/* Поля */
+/* --- Поля ввода ----------------------------------------------------------- */
 .field, .settings-field {
   width: 100%; min-height: 44px;
-  margin-top: .35rem; padding: .6rem .9rem;
-  border-radius: 13px;
+  margin-top: .35rem; padding: .65rem .95rem;
+  border-radius: 14px;
   border: 1px solid var(--glass-border);
   background: var(--field-bg);
   outline: none;
-  font-size: 16px; /* против zoom на iOS при фокусе (min 16px) */
-  transition: box-shadow .2s ease, border-color .2s ease, background-color .2s;
+  font-size: 16px;
+  transition: box-shadow .22s ease, border-color .22s ease, background-color .22s;
 }
 .field:focus, .settings-field:focus {
-  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
-/* На мобиле плотнее: та же форма, меньше паддинг/межстрочий */
 @media (max-width: 639px) {
-  .field, .settings-field { min-height: 48px; margin-top: .25rem; padding: .55rem .8rem; }
+  .field, .settings-field { min-height: 48px; margin-top: .25rem; padding: .55rem .85rem; }
   .glass.rounded-2xl.p-3 { padding: .85rem; }
   #settings-new-coin { gap: .5rem; }
 }
 
-/* --- Статистика ---------------------------------------------------------- */input[type=number] { font-variant-numeric: tabular-nums; }
+input[type=number] { font-variant-numeric: tabular-nums; }
 
-/* --- Статистика ---------------------------------------------------------- */
-/* Стеклянная панель, top-акцентная полоска, цветное число CTА */
-.stat-card { padding: 1.2rem 1.35rem; overflow: hidden; }
+/* --- Панель горизонта времени (24ч / 7дн / 30дн / 1 год) ------------------- */
+.horizon-bar {
+  display: inline-flex; align-items: center; gap: .25rem;
+  padding: .3rem; border-radius: 15px;
+  background: var(--track);
+  border: 1px solid var(--glass-border);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+}
+.horizon-btn {
+  padding: .35rem .75rem; border-radius: 10px;
+  font-size: .8rem; font-weight: 700;
+  border: none; background: transparent;
+  color: var(--muted);
+  transition: all .2s var(--ease-spring-soft);
+}
+.horizon-btn:hover { color: var(--ink); }
+.horizon-btn.active {
+  background: var(--accent-grad);
+  color: var(--accent-ink);
+  box-shadow: 0 3px 12px rgba(249, 115, 22, .35);
+  transform: scale(1.02);
+}
+
+/* --- Главные статистические карточки (сверху) ----------------------------- */
+.stat-card {
+  padding: 1.35rem 1.5rem;
+  overflow: hidden;
+  position: relative;
+}
 .stat-card::before {
   content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
   background: linear-gradient(90deg, transparent, var(--accent), transparent);
-  opacity: .75; pointer-events: none;
+  opacity: .8; pointer-events: none;
+}
+.stat-card-power::before {
+  background: linear-gradient(90deg, transparent, #38bdf8, transparent);
 }
 .stat-card .stat-label {
-  font-size: .75rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+  font-size: .78rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
   color: var(--muted);
-  display: flex; align-items: center; gap: .45rem;
+  display: flex; align-items: center; justify-content: space-between; gap: .5rem;
 }
-.stat-card .stat-label .ico { width: .95em; height: .95em; color: var(--accent); }
-.stat-main .stat-label { color: #fdba74; }
-.stat-value {
-  display: block; margin-top: .35rem;
-  font-family: var(--font-display); font-weight: 800;
-  font-size: clamp(1.5rem, 2.6vw + 1rem, 2.3rem);
-  letter-spacing: -.02em;
-  line-height: 1.05;
-  color: var(--ink);
-  text-shadow: 0 1px 0 rgba(255, 255, 255, .04);
-}
-.stat-hint { margin-top: .3rem; font-size: .8rem; color: var(--muted); }
+.stat-card .stat-label .ico { width: 1.05em; height: 1.05em; color: var(--accent); }
+.stat-card-power .stat-label .ico { color: #38bdf8; }
 
-/* Цифра профита — в цветовом акценте, хорошо видна на любом стекле */
-.stat-main .stat-value { color: #fbbf24; text-shadow: 0 0 24px rgba(251, 191, 36, .35); }
-.stat-main.negative .stat-value { color: var(--bad); text-shadow: 0 0 24px rgba(251, 113, 133, .32); }
-.stat-main {
-  /* Убираем янтарную заливку всего фона, теперь это тёмное стекло с топ-полосой */
-  background: var(--glass-bg);
-  border-color: color-mix(in srgb, var(--accent) 22%, var(--glass-border));
-  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-hi), 0 0 32px rgba(249, 115, 22, .12);
+.stat-value {
+  display: block; margin-top: .4rem;
+  font-family: var(--font-display); font-weight: 800;
+  font-size: clamp(1.75rem, 2.8vw + 1rem, 2.6rem);
+  letter-spacing: -.03em;
+  line-height: 1.08;
+  color: var(--ink);
+  transition: transform .2s ease;
 }
-/* Тёплое свечение только в углу (не мешает цифре) */
+
+.stat-main .stat-value {
+  color: #fbbf24;
+  text-shadow: 0 0 28px rgba(251, 191, 36, .38);
+}
+.stat-main.negative .stat-value {
+  color: var(--bad);
+  text-shadow: 0 0 28px rgba(251, 113, 133, .36);
+}
+.stat-main.profitable .stat-value {
+  color: #34d399;
+  text-shadow: 0 0 28px rgba(52, 211, 153, .4);
+}
+.stat-card-power .stat-value {
+  color: #7dd3fc;
+  text-shadow: 0 0 28px rgba(56, 189, 248, .32);
+}
+
+html:not(.dark) .stat-main .stat-value { color: #b45309; text-shadow: none; }
+html:not(.dark) .stat-main.profitable .stat-value { color: #059669; text-shadow: none; }
+html:not(.dark) .stat-main.negative .stat-value { color: #e11d48; text-shadow: none; }
+html:not(.dark) .stat-card-power .stat-value { color: #0284c7; text-shadow: none; }
+
 .stat-main::after {
-  content: ''; position: absolute; top: -52px; right: -24px; width: 180px; height: 180px;
-  border-radius: 50%; filter: blur(52px);
-  background: radial-gradient(circle, rgba(249, 115, 22, .34), transparent 70%);
+  content: ''; position: absolute; top: -60px; right: -30px; width: 200px; height: 200px;
+  border-radius: 50%; filter: blur(60px);
+  background: radial-gradient(circle, rgba(249, 115, 22, .32), transparent 70%);
   pointer-events: none;
 }
-/* Светлая тема — цифра глубже янтаря, чтобы не пропадала */
-html:not(.dark) .stat-main .stat-value { color: #b45309; text-shadow: none; }
-html:not(.dark) .stat-main .stat-label { color: #b45309; }
-html:not(.dark) .stat-main .stat-label .ico { color: #d97706; }
-
-/* Мини-лейблы в подзаголовке рига */
-.chip {
-  display: inline-flex; align-items: center; gap: .3rem;
-  padding: .1rem .55rem; border-radius: 999px;
-  background: var(--track); border: 1px solid var(--glass-border);
-  font-size: .74rem; font-weight: 700; white-space: nowrap;
-  vertical-align: baseline;
+.stat-card-power::after {
+  content: ''; position: absolute; top: -60px; right: -30px; width: 200px; height: 200px;
+  border-radius: 50%; filter: blur(60px);
+  background: radial-gradient(circle, rgba(56, 189, 248, .25), transparent 70%);
+  pointer-events: none;
 }
-.flash-up { animation: flash-up .55s var(--ease-out); }
-.flash-down { animation: flash-down .55s var(--ease-out); }
-@keyframes flash-up { 0% { color: var(--good); text-shadow: 0 0 22px rgba(52, 211, 153, .55); } 100% { } }
-@keyframes flash-down { 0% { color: var(--bad); text-shadow: 0 0 22px rgba(251, 113, 133, .55); } 100% { } }
 
-/* Итого по ригу в подвале — Unbounded для цифры хэша */
-.rig-total-hash { font-family: var(--font-display); }
+/* Прогресс-бар маржи */
+.margin-bar-wrap {
+  width: 100%; height: 6px; border-radius: 999px;
+  background: var(--track); overflow: hidden; margin-top: .85rem;
+}
+.margin-bar-fill {
+  height: 100%; border-radius: 999px;
+  background: var(--good-grad);
+  transition: width .5s var(--ease-spring-soft);
+}
+.margin-bar-fill.negative {
+  background: var(--bad-grad);
+}
+
+/* Сводка фермы (быстрый стрип) */
+.farm-summary-bar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem;
+  padding: .75rem 1.15rem; border-radius: 18px;
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  font-size: .82rem;
+}
+
+/* Бейджи и чипы */
+.chip {
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: .15rem .6rem; border-radius: 999px;
+  background: var(--track); border: 1px solid var(--glass-border);
+  font-size: .75rem; font-weight: 700; white-space: nowrap;
+}
+.chip-amber {
+  background: rgba(251, 191, 36, .12);
+  border-color: rgba(251, 191, 36, .3);
+  color: #fbbf24;
+}
+.chip-emerald {
+  background: rgba(52, 211, 153, .12);
+  border-color: rgba(52, 211, 153, .3);
+  color: #34d399;
+}
+.chip-rose {
+  background: rgba(251, 113, 133, .12);
+  border-color: rgba(251, 113, 133, .3);
+  color: #fb7185;
+}
+
+/* Пульсирующий индикатор работы */
+.status-pulse {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: #34d399; box-shadow: 0 0 10px #34d399;
+  animation: pulse-ring 2.2s cubic-bezier(.215, .61, .355, 1) infinite;
+}
+@keyframes pulse-ring {
+  0% { transform: scale(.95); box-shadow: 0 0 0 0 rgba(52, 211, 153, .7); }
+  70% { transform: scale(1.05); box-shadow: 0 0 0 8px rgba(52, 211, 153, 0); }
+  100% { transform: scale(.95); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+}
+
+/* Числа: анимация Flash */
+.flash-up { animation: flash-up .6s var(--ease-out); }
+.flash-down { animation: flash-down .6s var(--ease-out); }
+@keyframes flash-up { 0% { color: var(--good); text-shadow: 0 0 25px rgba(52, 211, 153, .7); } 100% { } }
+@keyframes flash-down { 0% { color: var(--bad); text-shadow: 0 0 25px rgba(251, 113, 133, .7); } 100% { } }
 
 /* --- Табы ригов с «пилюлей» ---------------------------------------------- */
 .rig-tabs {
@@ -251,182 +374,268 @@ html:not(.dark) .stat-main .stat-label .ico { color: #d97706; }
   scroll-snap-type: x proximity;
   -webkit-overflow-scrolling: touch;
   scroll-behavior: smooth;
-  border-radius: 17px;
+  border-radius: 18px;
   background: var(--track);
   border: 1px solid var(--glass-border);
-  -webkit-backdrop-filter: blur(14px) saturate(1.3);
-  backdrop-filter: blur(14px) saturate(1.3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  backdrop-filter: blur(18px) saturate(1.4);
 }
 .rig-tabs::-webkit-scrollbar { display: none; }
 .rig-pill {
   position: absolute; top: .35rem; left: 0; height: calc(100% - .7rem); width: 0;
-  border-radius: 13px; background: var(--accent-grad);
-  box-shadow: 0 4px 18px rgba(249, 115, 22, .45), inset 0 1px 0 rgba(255, 255, 255, .4);
-  transition: transform .42s var(--ease-spring), width .42s var(--ease-spring), opacity .2s, filter .42s ease-out;
+  border-radius: 14px; background: var(--accent-grad);
+  box-shadow: 0 4px 20px rgba(249, 115, 22, .48), inset 0 1px 0 rgba(255, 255, 255, .42);
+  transition: transform .42s var(--ease-spring), width .42s var(--ease-spring), opacity .2s;
   opacity: 0; pointer-events: none; z-index: 0;
-  will-change: transform;
-}
-@media (prefers-reduced-motion: reduce) {
-  .rig-pill { transition: none !important; filter: none !important; }
+  will-change: transform, width;
 }
 .rig-tab {
   position: relative; z-index: 1;
   flex: none; scroll-snap-align: start;
-  min-height: 44px; padding: .5rem 1.05rem;
-  border-radius: 13px; border: none; background: transparent;
-  font-weight: 700; font-size: .85rem; color: var(--muted);
+  min-height: 44px; padding: .55rem 1.15rem;
+  border-radius: 14px; border: none; background: transparent;
+  font-weight: 700; font-size: .875rem; color: var(--muted);
   transition: color .2s, transform .15s var(--ease-spring-soft);
 }
 .rig-tab:not(:disabled):active { transform: scale(.95); }
 .rig-tab.active { color: var(--accent-ink); }
 
-/* --- Карточки GPU -------------------------------------------------------- */
-/* (спарклайн удалён — бар-столбики выглядели как "яичные" овалы) */
+/* --- Видеокарты (GPU Cards) ----------------------------------------------- */
+.gpu-card {
+  position: relative;
+  border-radius: 20px;
+  padding: 1.25rem;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+  backdrop-filter: blur(20px) saturate(1.5);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-hi);
+  transition: transform .26s var(--ease-spring-soft), border-color .24s ease, box-shadow .3s ease;
+  overflow: hidden;
+}
+.gpu-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: .5; pointer-events: none;
+}
+@media (hover: hover) {
+  .gpu-card:hover {
+    transform: translateY(-3px);
+    border-color: color-mix(in srgb, var(--accent) 30%, var(--glass-border));
+    box-shadow: 0 14px 40px rgba(0, 0, 0, .28), inset 0 1px 0 var(--glass-hi);
+  }
+}
 
-/* --- Появление: страница, элементы, табы --------------------------------- */
-.page-enter { animation: rise-in .38s var(--ease-out); }
-.rise-in { animation: rise-in .55s var(--ease-spring-soft) both; will-change: transform, opacity; }
-.tab-pop { animation: tab-pop .34s var(--ease-spring); }
+/* Акцентный блок дохода на карте */
+.gpu-profit-badge {
+  display: flex; flex-direction: column;
+  padding: .75rem 1rem; border-radius: 16px;
+  background: var(--card-sub);
+  border: 1px solid var(--glass-border);
+  margin-top: .85rem;
+  transition: background-color .2s;
+}
+.gpu-profit-badge.profitable {
+  background: rgba(16, 185, 129, .09);
+  border-color: rgba(16, 185, 129, .25);
+}
+.gpu-profit-badge.negative {
+  background: rgba(244, 63, 94, .09);
+  border-color: rgba(244, 63, 94, .25);
+}
 
-@keyframes rise-in { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
-@keyframes tab-pop { from { transform: scale(.9); } 60% { transform: scale(1.04); } to { transform: scale(1); } }
+.gpu-profit-val {
+  font-family: var(--font-display);
+  font-weight: 800; font-size: 1.35rem;
+  letter-spacing: -.02em;
+}
+.gpu-profit-val.profitable { color: #34d399; }
+.gpu-profit-val.negative { color: #fb7185; }
+
+/* Микро-чипы параметров карты */
+.gpu-stat-grid {
+  display: grid; grid-template-columns: repeat(2, 1fr);
+  gap: .5rem; margin-top: .85rem;
+}
+.gpu-stat-chip {
+  padding: .5rem .75rem; border-radius: 12px;
+  background: var(--card-sub);
+  border: 1px solid var(--glass-border);
+}
+
+/* Доля в риге */
+.gpu-share-track {
+  width: 100%; height: 5px; border-radius: 999px;
+  background: var(--track); overflow: hidden; margin-top: .65rem;
+}
+.gpu-share-bar {
+  height: 100%; border-radius: 999px;
+  background: var(--accent-grad);
+  transition: width .5s var(--ease-spring);
+}
+
+/* --- Анимации появления -------------------------------------------------- */
+.page-enter { animation: page-in .4s var(--ease-out); }
+.rise-in { animation: rise-in .55s var(--ease-spring-soft) both; }
+.card-pop { animation: card-pop .48s var(--ease-spring-bounce) both; }
+
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(16px) scale(.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes card-pop {
+  from { opacity: 0; transform: translateY(22px) scale(.93); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
 
 /* --- Модалки -------------------------------------------------------------- */
 .modal-backdrop {
-  position: fixed; inset: 0; z-index: 40;
+  position: fixed; inset: 0; z-index: 50;
   display: flex; align-items: flex-end; justify-content: center;
   padding: .75rem;
-  background: rgba(3, 6, 12, .55);
-  -webkit-backdrop-filter: blur(10px) saturate(1.2);
-  backdrop-filter: blur(10px) saturate(1.2);
+  background: rgba(3, 6, 12, .62);
+  -webkit-backdrop-filter: blur(14px) saturate(1.3);
+  backdrop-filter: blur(14px) saturate(1.3);
   overscroll-behavior: contain;
   animation: fade-in .22s ease-out;
 }
 @media (min-width: 640px) { .modal-backdrop { align-items: center; } }
 .modal-panel {
   width: 100%; max-width: 32rem;
-  max-height: min(96dvh, 100%); /* на мобиле подтягивается почти до верха, не обрезая форму */
+  max-height: min(96dvh, 100%);
   overflow-y: auto;
   overscroll-behavior: contain;
-  border-radius: 22px; padding: 1.25rem;
+  border-radius: 24px; padding: 1.4rem;
   background: var(--glass-bg-strong);
-  -webkit-backdrop-filter: blur(26px) saturate(1.6);
-  backdrop-filter: blur(26px) saturate(1.6);
+  -webkit-backdrop-filter: blur(28px) saturate(1.7);
+  backdrop-filter: blur(28px) saturate(1.7);
   border: 1px solid var(--glass-border);
   box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-hi);
-  animation: sheet-in .42s var(--ease-spring);
+  animation: modal-in .42s var(--ease-spring);
   will-change: transform, opacity;
 }
-@media (min-width: 640px) { .modal-panel { animation-name: modal-in; max-height: min(88dvh, 760px); } }
 @media (max-width: 639px) {
-  .modal-panel { padding-bottom: calc(1.25rem + env(safe-area-inset-bottom)); border-radius: 22px 22px 16px 16px; }
-  /* Один скроллер — сама панель. Двойной nested-scroll (форма внутри);
-     приводил к "резиновой" прокрутке, обрезке dropdown и пляшущей кнопке. */
-  .modal-panel form > .btn-accent { position: sticky; bottom: 0; z-index: 2; margin-top: .85rem; box-shadow: 0 -14px 28px var(--glass-bg-strong); }
+  .modal-panel {
+    padding-bottom: calc(1.4rem + env(safe-area-inset-bottom));
+    border-radius: 24px 24px 16px 16px;
+    animation-name: sheet-in;
+  }
 }
 .modal-backdrop.closing { animation: fade-out .18s ease-in forwards; }
-.modal-backdrop.closing .modal-panel { animation: sheet-out .2s cubic-bezier(.5, 0, .75, 0) forwards; }
-@keyframes modal-in { from { opacity: 0; transform: translateY(22px) scale(.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
-@keyframes sheet-in { from { opacity: .4; transform: translateY(46px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes sheet-out { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(34px); } }
+.modal-backdrop.closing .modal-panel { animation: modal-out .2s cubic-bezier(.5, 0, .75, 0) forwards; }
+
+@keyframes modal-in { from { opacity: 0; transform: translateY(22px) scale(.94); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes sheet-in { from { opacity: .4; transform: translateY(50px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes modal-out { to { opacity: 0; transform: translateY(24px) scale(.95); } }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes fade-out { from { opacity: 1; } to { opacity: 0; } }
 
 /* --- Тосты ---------------------------------------------------------------- */
 .toast-region {
-  position: fixed; z-index: 50;
-  right: 1rem; top: 1rem;
-  display: flex; flex-direction: column; gap: .55rem;
-  max-width: min(92vw, 360px);
+  position: fixed; z-index: 60;
+  right: 1.25rem; top: 1.25rem;
+  display: flex; flex-direction: column; gap: .6rem;
+  max-width: min(92vw, 380px);
 }
 @media (max-width: 639px) {
-  .toast-region { right: 1rem; left: 1rem; top: auto; bottom: calc(1rem + env(safe-area-inset-bottom)); align-items: stretch; }
+  .toast-region {
+    right: 1rem; left: 1rem; top: auto;
+    bottom: calc(1rem + env(safe-area-inset-bottom));
+    align-items: stretch;
+  }
 }
 .toast {
-  display: flex; align-items: center; gap: .55rem;
-  padding: .75rem 1rem; border-radius: 15px;
+  display: flex; align-items: center; gap: .65rem;
+  padding: .85rem 1.15rem; border-radius: 16px;
   font-size: .875rem; font-weight: 600;
   background: var(--glass-bg-strong); color: var(--ink);
-  -webkit-backdrop-filter: blur(18px) saturate(1.5);
-  backdrop-filter: blur(18px) saturate(1.5);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
   border: 1px solid var(--glass-border);
-  box-shadow: var(--glass-shadow);
-  animation: toast-in .4s var(--ease-spring);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .4);
+  animation: toast-in .42s var(--ease-spring);
+  position: relative; overflow: hidden;
 }
+.toast::after {
+  content: ''; position: absolute; bottom: 0; left: 0; height: 3px;
+  width: 100%; background: var(--accent-grad);
+  animation: toast-progress 3.2s linear forwards;
+}
+.toast.ok::after { background: var(--good-grad); }
+.toast.error::after { background: var(--bad-grad); }
 .toast.ok .ico { color: var(--good); }
 .toast.error .ico { color: var(--bad); }
-.toast.ok { border-color: color-mix(in srgb, var(--good) 40%, transparent); }
-.toast.error { border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
-.toast.toast-out { animation: toast-out .22s ease-in forwards; }
-@keyframes toast-in { from { opacity: 0; transform: translateY(-14px) scale(.92); } to { opacity: 1; transform: translateY(0) scale(1); } }
-#auth-forgot { margin-top: .35rem; }
+.toast.ok { border-color: color-mix(in srgb, var(--good) 45%, transparent); }
+.toast.error { border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+.toast.toast-out { animation: toast-out .24s ease-in forwards; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-16px) scale(.92); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes toast-out { to { opacity: 0; transform: scale(.93); } }
+@keyframes toast-progress { from { width: 100%; } to { width: 0%; } }
 
-@keyframes toast-out { to { opacity: 0; transform: scale(.94); } }
-
-/* --- Кастомный dropdown (стеклянный, вместо native select) ---------------- */
-/* native select в тёмной теме даёт системный нечитаемый попап.
-   Список раскрывается INLINE прямо под кнопкой (аккордеон в потоке формы):
-   никакого fixed/absolute-позиционирования → модалка его не обрезает,
-   скроллится вместе с формой, кнопка «Сохранить» остаётся ниже. */
+/* --- Выпадающие списки (Dropdown) ----------------------------------------- */
 .dd { position: relative; margin-top: .35rem; }
 .dd-btn { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: .5rem; text-align: left; cursor: pointer; }
-.dd-caret { transition: transform .22s var(--ease-spring-soft); opacity: .6; }
+.dd-caret { transition: transform .22s var(--ease-spring-soft); opacity: .65; }
 .dd.open .dd-caret { transform: rotate(180deg); }
 .dd-btn { border-color: var(--glass-border); }
-.dd.open .dd-btn { border-color: color-mix(in srgb, var(--accent) 45%, var(--glass-border)); }
+.dd.open .dd-btn { border-color: color-mix(in srgb, var(--accent) 55%, var(--glass-border)); }
 .dd-list {
   display: none;
-  margin: .35rem 0 0; padding: .35rem; list-style: none;
+  margin: .35rem 0 0; padding: .4rem; list-style: none;
   max-height: 220px; overflow-y: auto;
-  border-radius: 14px;
+  border-radius: 16px;
   background: var(--glass-bg-strong);
-  -webkit-backdrop-filter: blur(22px) saturate(1.6);
-  backdrop-filter: blur(22px) saturate(1.6);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  backdrop-filter: blur(24px) saturate(1.6);
   border: 1px solid var(--glass-border);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, .35), inset 0 1px 0 var(--glass-hi);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, .4), inset 0 1px 0 var(--glass-hi);
 }
 .dd.open .dd-list { display: block; animation: rise-in .22s var(--ease-spring-soft); }
 .dd-item {
   width: 100%; text-align: left;
-  padding: .55rem .75rem; border-radius: 9px; border: none; background: none;
+  padding: .6rem .8rem; border-radius: 10px; border: none; background: none;
   font-size: .875rem; font-weight: 600; color: var(--ink);
   transition: background-color .15s ease;
 }
-.dd-item:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
-.dd-item.selected { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); }
+.dd-item:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.dd-item.selected { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
+
+/* --- Аутентификация ------------------------------------------------------- */
+.auth-logo {
+  width: 3.5rem; height: 3.5rem;
+  display: grid; place-items: center;
+  border-radius: 18px;
+  background: var(--accent-grad); color: var(--accent-ink);
+  box-shadow: 0 8px 28px rgba(249, 115, 22, .45), inset 0 1px 0 rgba(255, 255, 255, .5);
+  animation: glow-pulse 4s ease-in-out infinite;
+}
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 8px 28px rgba(249, 115, 22, .4), inset 0 1px 0 rgba(255,255,255,.5); }
+  50% { box-shadow: 0 8px 42px rgba(251, 146, 60, .6), inset 0 1px 0 rgba(255,255,255,.5); }
+}
+.auth-title {
+  font-family: var(--font-display); font-weight: 800; font-size: 2rem;
+  background: linear-gradient(120deg, #fde68a, #fb923c 55%, #fdba74);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+html:not(.dark) .auth-title {
+  background: linear-gradient(120deg, #b45309, #ea580c 60%, #f59e0b);
+  -webkit-background-clip: text; background-clip: text;
+}
 
 /* --- Скелетон ------------------------------------------------------------- */
 .skeleton { position: relative; overflow: hidden; background: var(--track); border-radius: 14px; }
 .skeleton::after {
   content: ''; position: absolute; inset: 0;
   transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--ink) 10%, transparent), transparent);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--ink) 12%, transparent), transparent);
   animation: skeleton-sweep 1.4s var(--ease-out) infinite;
 }
 @keyframes skeleton-sweep { to { transform: translateX(100%); } }
-
-/* --- Аутенфикация ---------------------------------------------------------- */
-.auth-logo {
-  width: 3.35rem; height: 3.35rem;
-  display: grid; place-items: center;
-  border-radius: 18px;
-  background: var(--accent-grad); color: var(--accent-ink);
-  box-shadow: 0 8px 26px rgba(249, 115, 22, .4), inset 0 1px 0 rgba(255, 255, 255, .5);
-  animation: glow-pulse 5s ease-in-out infinite;
-}
-@keyframes glow-pulse { 0%, 100% { box-shadow: 0 8px 26px rgba(249, 115, 22, .38), inset 0 1px 0 rgba(255,255,255,.5); } 50% { box-shadow: 0 8px 38px rgba(251, 146, 60, .55), inset 0 1px 0 rgba(255,255,255,.5); } }
-.auth-title { font-family: var(--font-display); font-weight: 800; font-size: 1.9rem; background: linear-gradient(120deg, #fde68a, #fb923c 55%, #fdba74); -webkit-background-clip: text; background-clip: text; color: transparent; }
-html:not(.dark) .auth-title { background: linear-gradient(120deg, #b45309, #ea580c 60%, #f59e0b); -webkit-background-clip: text; background-clip: text; }
-
-/* --- Скролл ---------------------------------------------------------------- */
-.scroll-row { scrollbar-width: thin; scrollbar-color: var(--glass-border) transparent; }
-.scroll-row::-webkit-scrollbar { height: 7px; width: 7px; }
-.scroll-row::-webkit-scrollbar-thumb { background: var(--glass-border); border-radius: 999px; }
-
-/* Плавная смена темы только на нужном (не на всём * — это съест ресурсы и дёргает) */
-body, .glass, .card-glass, .stat-card, .rig-tabs, .modal-panel, .toast, .chip, .field, .settings-field, .btn, .auth-panel {
-  transition: background-color .22s ease, border-color .22s ease;
-}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -438,5 +647,6 @@ body, .glass, .card-glass, .stat-card, .rig-tabs, .modal-panel, .toast, .chip, .
   .aurora-blob { animation: none !important; }
 }
 
-/* Скажем браузерам: при backdrop-filter будем рисовать карточки на GPU-слое */
-.card-glass, .glass, .modal-panel, .toast, .rig-tabs { backface-visibility: hidden; transform-style: flat; }
+.card-glass, .glass, .modal-panel, .toast, .rig-tabs, .gpu-card {
+  backface-visibility: hidden; transform-style: flat;
+}

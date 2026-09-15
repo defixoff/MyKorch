@@ -1,6 +1,4 @@
-const CACHE_NAME = 'moy-korch-v11';
-// Список нужен только как оффлайн-фолбэк — актуальность контента больше
-// не зависит от ручного бампа версии в этих строках (см. network-first ниже).
+const CACHE_NAME = 'moy-korch-v20';
 const STATIC_FILES = ['/index.html', '/app.js', '/styles.css', '/manifest.json', '/icon.svg', '/fonts/unbounded.ttf'];
 
 self.addEventListener('install', (event) => {
@@ -16,13 +14,8 @@ self.addEventListener('activate', (event) => event.waitUntil(
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
-  // Данные пользователя всегда должны идти в сеть: иначе после POST интерфейс
-  // видел бы устаревший ответ /api/rigs или /api/.../cards из Cache Storage.
   if (url.pathname.startsWith('/api/')) return;
 
-  // Network-first: свежая версия — приоритет, кэш — только оффлайн-фолбэк.
-  // Раньше было наоборот (cache-first), из-за чего пользователи видели
-  // старый билд, пока в кэше вообще что-то лежало.
   event.respondWith(
     fetch(event.request)
       .then((response) => {

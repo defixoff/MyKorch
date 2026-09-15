@@ -4,14 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#05070d" />
-    <meta name="description" content="Мой корч — личный майнинг-калькулятор" />
+    <meta name="description" content="Мой корч — премиальный майнинг-калькулятор с точным расчётом профита по ригам и видеокартам" />
     <link rel="manifest" href="/manifest.json" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icon.svg" />
     <link rel="preconnect" href="https://cdn.tailwindcss.com" crossorigin />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <!-- Санкционно безопасный боди-шрифт (Inter). Дисплейный Unbounded — локально -->
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" />
     <link rel="preload" as="font" href="/fonts/unbounded.ttf" type="font/ttf" crossorigin />
     <script src="https://cdn.tailwindcss.com"></script>
@@ -29,24 +28,27 @@
       };
     </script>
     <link rel="stylesheet" href="/styles.css" />
-    <title>Мой корч</title>
+    <title>Мой корч — Калькулятор майнинг-фермы</title>
   </head>
   <body class="min-h-screen bg-[#f4f6fb] font-sans text-slate-900 antialiased transition-colors duration-300 dark:bg-[#05070d] dark:text-slate-100">
-    <!-- Aurora-фон (декор): дрейфующие тёплые пятна + зернистость, за всем UI -->
+    <!-- Живой анимированный аврора-фон с частицами -->
     <div class="aurora" aria-hidden="true">
+      <canvas id="aurora-canvas" class="aurora-canvas"></canvas>
       <span class="aurora-blob aurora-blob--1"></span>
       <span class="aurora-blob aurora-blob--2"></span>
       <span class="aurora-blob aurora-blob--3"></span>
-      <span class="aurora-grain"></span>
+      <span class="aurora-mesh"></span>
     </div>
+
+    <!-- Холст для праздничных эффектов конфетти -->
+    <canvas id="confetti-canvas" class="confetti-canvas" aria-hidden="true"></canvas>
 
     <main id="app" class="relative z-[1]"></main>
     <div id="toast-region" class="toast-region" aria-live="polite"></div>
 
-    <!-- SVG-иконки. Использование: ico('gear'), ico('logo') и т.д. (app.js) -->
+    <!-- SVG-иконки спрайта -->
     <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
       <symbol id="i-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <!-- Lucide `pickaxe` (lucide.dev) -->
         <path d="m14 13-8.381 8.38a1 1 0 0 1-3.001-3L11 9.999" />
         <path d="M15.973 4.027A13 13 0 0 0 5.902 2.373c-1.398.342-1.092 2.158.277 2.601a19.9 19.9 0 0 1 5.822 3.024" />
         <path d="M16.001 11.999a19.9 19.9 0 0 1 3.024 5.824c.444 1.369 2.26 1.676 2.603.278A13 13 0 0 0 20 8.069" />
@@ -67,6 +69,28 @@
       <symbol id="i-coin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="m16.71 13.88.7.71-2.82 2.82"/></symbol>
       <symbol id="i-flash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></symbol>
       <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></symbol>
+      <!-- Дополнительные иконки для майнинг-калькулятора -->
+      <symbol id="i-gpu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect width="18" height="12" x="3" y="6" rx="2"/>
+        <path d="M7 10h.01M12 10h.01M17 10h.01M7 14h.01M12 14h.01M17 14h.01"/>
+        <circle cx="12" cy="12" r="2.5"/>
+        <path d="M6 18v2M18 18v2M3 10v4M21 10v4"/>
+      </symbol>
+      <symbol id="i-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-5 5"/>
+      </symbol>
+      <symbol id="i-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+      </symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+      </symbol>
+      <symbol id="i-sparkle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/>
+      </symbol>
+      <symbol id="i-farm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect width="20" height="7" x="2" y="3" rx="2"/><rect width="20" height="7" x="2" y="14" rx="2"/><circle cx="6" cy="6.5" r="1"/><circle cx="6" cy="17.5" r="1"/>
+      </symbol>
     </svg>
 
     <script src="/app.js"></script>
